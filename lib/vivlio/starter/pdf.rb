@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require_relative "pdf/version"
-require_relative "pdf/cli"
 require_relative "pdf/reader"
 require_relative "cli/pdf/enhanced_provider"
 require_relative "cli/pdf/outline_writer"
