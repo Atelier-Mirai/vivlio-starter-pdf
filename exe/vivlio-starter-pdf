@@ -1,0 +1,52 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'vivlio/starter/pdf'
+
+# vivlio-starter-pdf CLI
+# Provides basic version information for debugging and user confirmation
+
+module Vivlio
+  module Starter
+    module PDF
+      class CLI
+        def self.run(args = [])
+          case args[0]
+          when '--version', '-v'
+            puts "vivlio-starter-pdf #{VERSION}"
+          when '--help', '-h', nil
+            puts <<~HELP
+              vivlio-starter-pdf #{VERSION} - Advanced PDF processor for vivlio-starter
+              
+              Usage:
+                vivlio-starter-pdf [options]
+              
+              Options:
+                --version, -v  Print version and exit
+                --help, -h     Print this help and exit
+              
+              Description:
+                vivlio-starter-pdf is an AGPL-licensed plugin for vivlio-starter
+                that provides advanced PDF processing capabilities including:
+                - PDF to Markdown conversion using HexaPDF
+                - Japanese OCR support with Tesseract
+                - Image extraction and precise positioning
+                - PDF outline generation and hidden pagination
+              
+              This is a plugin and should be used through vivlio-starter:
+                vs pdf:read document.pdf
+              
+              For more information, visit: https://github.com/Atelier-Mirai/vivlio-starter-pdf
+            HELP
+          else
+            puts "Error: Unknown option '#{args[0]}'"
+            puts "Use 'vivlio-starter-pdf --help' for usage information."
+            exit 1
+          end
+        end
+      end
+    end
+  end
+end
+
+Vivlio::Starter::PDF::CLI.run(ARGV)

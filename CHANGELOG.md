@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-03-21
+
+### Added
+- CLI 実装 (exe/vivlio-starter-pdf)
+- --version/-v オプションでバージョン表示
+- --help/-h オプションで使用方法と説明を表示
+- エラーハンドリングと不明オプションの処理
+
+### Improved
+- ユーザー体験の向上（インストール後の動作確認可能）
+- 標準的な CLI インターフェース準拠
+
 ## [1.0.0] - 2026-03-21
 
 ### 🎉 最初のメジャーリリース
