@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 
-require_relative "lib/vivlio/starter/pdf/version"
+require_relative "lib/vivlio_starter/cli/pdf/version"
 
 Gem::Specification.new do |spec|
   spec.name = "vivlio-starter-pdf"
-  spec.version = Vivlio::Starter::PDF::VERSION
+  spec.version = VivlioStarter::Pdf::VERSION
   spec.authors = ["Mirai"]
   spec.email = ["mirai@example.com"]
 

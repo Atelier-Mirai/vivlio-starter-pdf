@@ -17,7 +17,7 @@ class ReaderTest < Minitest::Test
     skip "ImageMagick is not available" unless imagemagick_available?
 
     Dir.mktmpdir do |dir|
-      result = Vivlio::Starter::PDF::Reader.new(
+      result = VivlioStarter::Pdf::Reader.new(
         SAMPLE_PDF,
         page_separator: true,
         images_dir: dir,
@@ -45,15 +45,15 @@ class ReaderTest < Minitest::Test
 
   # OCR auto モードが断片化したテキストに対して Tesseract 出力を優先することを検証する
   def test_ocr_auto_prefers_tesseract_output_for_fragmented_text
-    reader = Vivlio::Starter::PDF::Reader.new(SAMPLE_PDF)
-    content = Vivlio::Starter::PDF::Reader::PageContent.new(
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
+    content = VivlioStarter::Pdf::Reader::PageContent.new(
       text: "プ ロ グ ラ ミ ン グ を 学 ぶ と い う こ と は 単 に コ ー ド の 書 き 方 を 覚 え る こ と で は あ り ま せ ん",
       lines: [],
       image_occurrences: []
     )
 
     reader.stub :ocr_dependencies_ready?, true do
-      reader.stub :ocr_page_result, Vivlio::Starter::PDF::Reader::OcrResult.new(
+      reader.stub :ocr_page_result, VivlioStarter::Pdf::Reader::OcrResult.new(
         text: "プログラミングを学ぶということ",
         lines: [],
         blocks: [],
@@ -72,7 +72,7 @@ class ReaderTest < Minitest::Test
 
   # normalize_ocr がユーザーフレンドリーな言語エイリアスを受け入れることを検証する
   def test_normalize_ocr_accepts_user_friendly_language_aliases
-    reader = Vivlio::Starter::PDF::Reader.new(
+    reader = VivlioStarter::Pdf::Reader.new(
       SAMPLE_PDF,
       ocr: { languages: %w[japanese japanese_vertical eng], inline_image_text: "captionize" }
     )
@@ -85,13 +85,13 @@ class ReaderTest < Minitest::Test
 
   # apply_inline_image_text_policy が exclude モードで画像内の行を除外することを検証する
   def test_apply_inline_image_text_policy_excludes_lines_inside_images
-    reader = Vivlio::Starter::PDF::Reader.new(SAMPLE_PDF, ocr: { inline_image_text: "exclude" })
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF, ocr: { inline_image_text: "exclude" })
     lines = [
-      Vivlio::Starter::PDF::Reader::Line.new(y: 700.0, text: "本文行"),
-      Vivlio::Starter::PDF::Reader::Line.new(y: 420.0, text: "図中テキスト")
+      VivlioStarter::Pdf::Reader::Line.new(y: 700.0, text: "本文行"),
+      VivlioStarter::Pdf::Reader::Line.new(y: 420.0, text: "図中テキスト")
     ]
     images = [
-      Vivlio::Starter::PDF::Reader::ImageAsset.new(
+      VivlioStarter::Pdf::Reader::ImageAsset.new(
         page: 1,
         index: 1,
         filename: "image.webp",
@@ -116,13 +116,13 @@ class ReaderTest < Minitest::Test
 
   # apply_inline_image_text_policy が captionize モードで画像内の行をキャプション化することを検証する
   def test_apply_inline_image_text_policy_captionizes_lines_inside_images
-    reader = Vivlio::Starter::PDF::Reader.new(SAMPLE_PDF, ocr: { inline_image_text: "captionize" })
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF, ocr: { inline_image_text: "captionize" })
     lines = [
-      Vivlio::Starter::PDF::Reader::Line.new(y: 700.0, text: "本文行"),
-      Vivlio::Starter::PDF::Reader::Line.new(y: 420.0, text: "あなただけの 主題 を。")
+      VivlioStarter::Pdf::Reader::Line.new(y: 700.0, text: "本文行"),
+      VivlioStarter::Pdf::Reader::Line.new(y: 420.0, text: "あなただけの 主題 を。")
     ]
     images = [
-      Vivlio::Starter::PDF::Reader::ImageAsset.new(
+      VivlioStarter::Pdf::Reader::ImageAsset.new(
         page: 1,
         index: 1,
         filename: "image.webp",
@@ -147,8 +147,8 @@ class ReaderTest < Minitest::Test
 
   # build_page_chunk が行なしで画像がある場合にフォールバックテキストを保持することを検証する
   def test_build_page_chunk_keeps_fallback_text_when_images_exist_without_lines
-    reader = Vivlio::Starter::PDF::Reader.new(SAMPLE_PDF)
-    image = Vivlio::Starter::PDF::Reader::ImageAsset.new(
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
+    image = VivlioStarter::Pdf::Reader::ImageAsset.new(
       page: 1,
       index: 1,
       filename: "image.webp",
@@ -171,11 +171,11 @@ class ReaderTest < Minitest::Test
 
   # filtered_image_occurrences がフルページスキャン画像を除外することを検証する
   def test_filtered_image_occurrences_excludes_full_page_scan_images
-    reader = Vivlio::Starter::PDF::Reader.new(SAMPLE_PDF)
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
     page = Class.new do
       def [](key) = key == :MediaBox ? [0.0, 0.0, 600.0, 800.0] : nil
     end.new
-    full_page = Vivlio::Starter::PDF::Reader::ImageOccurrence.new(
+    full_page = VivlioStarter::Pdf::Reader::ImageOccurrence.new(
       x: 300.0,
       top: 790.0,
       bottom: 10.0,
@@ -186,7 +186,7 @@ class ReaderTest < Minitest::Test
       height: 780.0,
       object: Object.new
     )
-    small_image = Vivlio::Starter::PDF::Reader::ImageOccurrence.new(
+    small_image = VivlioStarter::Pdf::Reader::ImageOccurrence.new(
       x: 300.0,
       top: 500.0,
       bottom: 350.0,
@@ -205,11 +205,11 @@ class ReaderTest < Minitest::Test
 
   # filtered_image_occurrences が include モードでフルページスキャンをフォールバックとして保持することを検証する
   def test_filtered_image_occurrences_keeps_full_page_scan_as_fallback_for_include
-    reader = Vivlio::Starter::PDF::Reader.new(SAMPLE_PDF, ocr: { inline_image_text: "include" })
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF, ocr: { inline_image_text: "include" })
     page = Class.new do
       def [](key) = key == :MediaBox ? [0.0, 0.0, 600.0, 800.0] : nil
     end.new
-    full_page = Vivlio::Starter::PDF::Reader::ImageOccurrence.new(
+    full_page = VivlioStarter::Pdf::Reader::ImageOccurrence.new(
       x: 300.0,
       top: 790.0,
       bottom: 10.0,
@@ -228,7 +228,7 @@ class ReaderTest < Minitest::Test
 
   # find_regions_from_profile が小さなギャップを跨いで行をグループ化することを検証する
   def test_find_regions_from_profile_groups_rows_across_small_gaps
-    reader = Vivlio::Starter::PDF::Reader.new(SAMPLE_PDF)
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
     profile = Array.new(40, 0) + Array.new(80, 1) + Array.new(12, 0) + Array.new(70, 1) + Array.new(60, 0)
 
     regions = reader.send(:find_regions_from_profile, profile, profile.length, max_gap: 20, min_height: 100)
@@ -240,8 +240,8 @@ class ReaderTest < Minitest::Test
 
   # illustration_region_candidate? が大きなイラスト形状を受け入れることを検証する
   def test_illustration_region_candidate_accepts_large_illustration_shape
-    reader = Vivlio::Starter::PDF::Reader.new(SAMPLE_PDF)
-    region = Vivlio::Starter::PDF::Reader::IllustrationRegion.new(left: 240.0, top: 420.0, width: 1480.0, height: 880.0)
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
+    region = VivlioStarter::Pdf::Reader::IllustrationRegion.new(left: 240.0, top: 420.0, width: 1480.0, height: 880.0)
 
     accepted = reader.send(:illustration_region_candidate?, region, 2480.0, 3509.0)
 
@@ -250,8 +250,8 @@ class ReaderTest < Minitest::Test
 
   # illustration_region_candidate? がバナー状の横長領域を拒否することを検証する
   def test_illustration_region_candidate_rejects_banner_like_wide_regions
-    reader = Vivlio::Starter::PDF::Reader.new(SAMPLE_PDF)
-    region = Vivlio::Starter::PDF::Reader::IllustrationRegion.new(left: 160.0, top: 215.0, width: 2040.0, height: 505.0)
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
+    region = VivlioStarter::Pdf::Reader::IllustrationRegion.new(left: 160.0, top: 215.0, width: 2040.0, height: 505.0)
 
     accepted = reader.send(:illustration_region_candidate?, region, 2480.0, 3509.0)
 
@@ -260,11 +260,11 @@ class ReaderTest < Minitest::Test
 
   # ocr_image_occurrences が埋め込み画像がない場合に vips を使用することを検証する
   def test_ocr_image_occurrences_uses_vips_when_embedded_images_are_absent
-    reader = Vivlio::Starter::PDF::Reader.new(SAMPLE_PDF)
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
     page = Class.new do
       def [](key) = key == :MediaBox ? [0.0, 0.0, 600.0, 800.0] : nil
     end.new
-    result = Vivlio::Starter::PDF::Reader::OcrResult.new(
+    result = VivlioStarter::Pdf::Reader::OcrResult.new(
       text: "",
       lines: [],
       blocks: [],
@@ -273,14 +273,14 @@ class ReaderTest < Minitest::Test
       image_height: 3509,
       temp_dir: nil
     )
-    region = Vivlio::Starter::PDF::Reader::IllustrationRegion.new(left: 568, top: 583, width: 1312, height: 721)
+    region = VivlioStarter::Pdf::Reader::IllustrationRegion.new(left: 568, top: 583, width: 1312, height: 721)
 
     reader.stub :scanned_page_image?, false do
       reader.stub :extract_illustration_regions_vips, [region] do
         occurrences = reader.send(:ocr_image_occurrences, page, [], result)
 
         assert_equal(1, occurrences.length)
-        assert_instance_of(Vivlio::Starter::PDF::Reader::RenderedPageCrop, occurrences.first.object)
+        assert_instance_of(VivlioStarter::Pdf::Reader::RenderedPageCrop, occurrences.first.object)
       end
     end
   end
@@ -293,7 +293,7 @@ class ReaderTest < Minitest::Test
     skip "ImageMagick is not available" unless imagemagick_available?
 
     Dir.mktmpdir do |dir|
-      result = Vivlio::Starter::PDF::Reader.new(
+      result = VivlioStarter::Pdf::Reader.new(
         OCR_SAMPLE_PDF,
         page_separator: true,
         images_dir: dir,
