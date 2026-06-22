@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-06-23
+
+### Fixed
+- 隠しノンブルのフォントを埋め込み可能な TTF に変更（FT-02）。HexaPDF 組込の標準 14 フォント `Helvetica` は PDF に埋め込まれず、印刷所入稿で「非埋め込みフォント」事故になっていた。書籍プロジェクト直下に同梱の `stylesheets/fonts/hackgen35/HackGen35ConsoleNF-Regular.ttf` があれば `font.map` へ登録して使用し、数字グリフのみをサブセット埋め込みする（極小）。同梱フォントが無い場合は従来どおり `Helvetica` にフォールバックしてビルドは継続する。`EnhancedProviderTest` を追加。
+
 ## [1.1.0] - 2026-06-10
 
 ### Changed

@@ -12,8 +12,15 @@ module VivlioStarter
     # 隠しノンブル書き込み・PDF アウトライン付与など、
     # Enhanced Mode 固有の PDF 操作を提供する。
     class EnhancedProvider
-      # 隠しノンブルに使用するフォント名
-      FONT_NAME = "Helvetica"
+      # 隠しノンブルに使う埋め込み可能フォント（書籍プロジェクト同梱の TTF）。
+      # HexaPDF 組込の "Helvetica" は標準 14 フォントで PDF に埋め込まれず、印刷所入稿で
+      # 「非埋め込みフォント」事故になる（FT-02）。プロジェクト直下に同梱の
+      # HackGen35ConsoleNF があれば登録してサブセット埋め込みする（数字のみで極小）。
+      NOMBRE_FONT_RELATIVE = File.join("stylesheets", "fonts", "hackgen35", "HackGen35ConsoleNF-Regular.ttf")
+      # document.config の font.map へ登録する内部フォント名
+      NOMBRE_FONT_NAME = "VivlioNombre"
+      # 同梱フォントが見つからない場合のフォールバック（非埋め込み標準フォント）
+      FALLBACK_FONT_NAME = "Helvetica"
       # 隠しノンブルのフォントサイズ（pt）
       FONT_SIZE_PT = 6
 
@@ -41,8 +48,10 @@ module VivlioStarter
 
         LogHelper.log_action("[NombreStamper] 隠しノンブルを書き込みます（#{total} ページ）[Enhanced Mode]…")
 
+        font = register_nombre_font(document)
+
         document.pages.each_with_index do |page, idx|
-          stamp_page(page, idx + 1, bleed_pt: bleed_pt.to_f)
+          stamp_page(page, idx + 1, bleed_pt: bleed_pt.to_f, font:)
         end
 
         document.write(pdf_path, optimize: true)
@@ -80,13 +89,25 @@ module VivlioStarter
 
       private
 
+      # 隠しノンブル用フォントを document へ登録し、canvas に渡すフォント名を返す。
+      # 同梱 TTF（NOMBRE_FONT_RELATIVE）があればサブセット埋め込みされる名前を、
+      # 見つからなければ非埋め込みの Helvetica（FALLBACK_FONT_NAME）を返す。
+      # @param document [HexaPDF::Document]
+      # @return [String] canvas.font に渡すフォント名
+      def register_nombre_font(document)
+        return FALLBACK_FONT_NAME unless File.exist?(NOMBRE_FONT_RELATIVE)
+
+        (document.config["font.map"] ||= {})[NOMBRE_FONT_NAME] = { none: NOMBRE_FONT_RELATIVE }
+        NOMBRE_FONT_NAME
+      end
+
       # 1 ページに隠しノンブルを描画する
       # 奇数ページは左端 90°、偶数ページは右端 -90° に回転配置する
-      def stamp_page(page, page_number, bleed_pt:)
+      def stamp_page(page, page_number, bleed_pt:, font:)
         canvas = page.canvas(type: :overlay)
         box = page.box(:media)
 
-        canvas.font(FONT_NAME, size: FONT_SIZE_PT)
+        canvas.font(font, size: FONT_SIZE_PT)
         canvas.fill_color(0)
 
         x_offset = bleed_pt / 2.0

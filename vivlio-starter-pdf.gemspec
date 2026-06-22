@@ -19,8 +19,10 @@ Gem::Specification.new do |spec|
   spec.metadata["source_code_uri"] = "https://github.com/Atelier-Mirai/vivlio-starter-pdf"
   spec.post_install_message = <<~MESSAGE
     [vivlio-starter-pdf]
-    Enhanced Mode の OCR を利用するには以下の外部ツールを Homebrew でインストールしてください:
-      brew install tesseract tesseract-lang poppler vips
+    Enhanced Mode の OCR には外部ツール（tesseract / tesseract-lang / poppler / vips）が必要です。
+      vs doctor --fix
+    で本体側からまとめて導入できます（macOS / Homebrew）。
+    手動の場合: brew install tesseract tesseract-lang poppler vips
 
     すでに導入済みの場合はこのメッセージを無視して構いません。
   MESSAGE
