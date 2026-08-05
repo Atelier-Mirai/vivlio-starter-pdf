@@ -12,7 +12,7 @@ Gem::Specification.new do |spec|
   spec.description = "Provides PDF outline extraction, precision page numbering, and OCR via HexaPDF. AGPL-3.0 licensed."
   spec.homepage = "https://github.com/Atelier-Mirai/vivlio-starter-pdf"
   spec.license = "AGPL-3.0-only"
-  spec.required_ruby_version = ">= 4.0.0"
+  spec.required_ruby_version = ">= 3.4.0"
 
   spec.metadata["allowed_push_host"] = "https://rubygems.org"
   spec.metadata["homepage_uri"] = spec.homepage

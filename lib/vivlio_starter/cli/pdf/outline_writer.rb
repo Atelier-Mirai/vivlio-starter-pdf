@@ -54,7 +54,9 @@ module VivlioStarter
 
       # Normalizes a raw hash into a consistent entry structure.
       def normalize_entry(raw)
-        text = fetch(raw, :text, fetch(raw, :title, nil)).to_s.strip
+        text = entry_title(raw)
+        return nil if text.nil?
+
         warn_skip("missing title for outline entry: #{raw.inspect}") if text.empty?
         return nil if text.empty?
 
@@ -71,13 +73,40 @@ module VivlioStarter
         { text:, page:, level: }
       end
 
+      # Returns the trimmed title, or +nil+ when the entry must be skipped.
+      #
+      # A title carrying invalid UTF-8 bytes makes +String#strip+ raise
+      # +Encoding::CompatibilityError: invalid byte sequence in UTF-8+. Letting that
+      # escape costs the *entire* outline: +add_outline!+ rescues at the top, so one
+      # mojibake heading would leave the book with no bookmarks at all. Every other
+      # kind of bad entry is skipped one by one through +on_skip+ — this one must
+      # behave the same way, and the message has to name the entry so the author can
+      # fix the manuscript heading that produced it.
+      #
+      # Both +EncodingError+ and +ArgumentError+ are caught on purpose: which one
+      # Ruby raises for broken bytes depends on the method (+strip+ raises
+      # +Encoding::CompatibilityError+, +match?+ raises +ArgumentError+), and that
+      # detail must not decide whether the book keeps its bookmarks.
+      def entry_title(raw)
+        fetch(raw, :text, fetch(raw, :title, nil)).to_s.strip
+      rescue EncodingError, ArgumentError
+        # +inspect+ is safe here: it escapes invalid bytes (\xFF) instead of raising.
+        warn_skip("title is not valid UTF-8, skipping outline entry: #{raw.inspect}")
+        nil
+      end
+
       # Fetches a value from the entry by symbol or string key.
+      #
+      # Entries come from the caller, so a stray String or Integer can end up in the
+      # array. Both answer +respond_to?(:[])+ but raise +TypeError+ when indexed with
+      # a Symbol (+Integer#[]+ is bit access), which would abort the whole outline —
+      # exactly what the per-entry skip exists to prevent. Duck typing is kept so a
+      # Hash-like object still works; only the indexing failure falls back.
       def fetch(raw, key, fallback)
-        if raw.respond_to?(:[]) && (raw[key] || raw[key.to_s])
-          raw[key] || raw[key.to_s]
-        else
-          fallback
-        end
+        value = (raw[key] || raw[key.to_s] if raw.respond_to?(:[]))
+        value.nil? ? fallback : value
+      rescue TypeError
+        fallback
       end
 
       # Returns the proper parent node for the requested level.
