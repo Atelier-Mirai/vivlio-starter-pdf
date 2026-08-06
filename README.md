@@ -1,7 +1,7 @@
 # vivlio-starter-pdf
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![Ruby](https://img.shields.io/badge/Ruby-%3E%3D%204.0-red.svg)](https://www.ruby-lang.org/)
+[![Ruby](https://img.shields.io/badge/Ruby-%3E%3D%203.4-red.svg)](https://www.ruby-lang.org/)
 
 **vivlio-starter** の AGPL 拡張プラグイン。HexaPDF を活用した高度な PDF 解析・後処理機能を提供します。
 
@@ -46,23 +46,33 @@ brew install tesseract tesseract-lang poppler vips
 vs pdf:read document.pdf
 ```
 
+標準（MIT）実装に戻して動作を比べたいときは、環境変数で無効化できます。
+
+```zsh
+VIVLIO_PDF_PLUGIN=disable vs build
+```
+
 ### Ruby API
 
 ```ruby
-require "vivlio/starter/pdf"
+require "vivlio_starter/pdf"
 
 # PDF → Markdown 変換
-result = Vivlio::Starter::PDF::Reader.new("input.pdf",
+result = VivlioStarter::Pdf::Reader.new("input.pdf",
   ocr: { mode: "auto", languages: ["jpn"], dpi: 300 }
 ).execute
 
 # アウトライン付与
-provider = Vivlio::Starter::Pdf::EnhancedProvider.new
+provider = VivlioStarter::Pdf::EnhancedProvider.new
 provider.add_outline!(pdf_path, items, max_level: 3)
 
 # 隠しノンブル
 provider.stamp_nombre!(pdf_path, bleed_pt: 8.5)
 ```
+
+`stamp_nombre!` / `add_outline!` は成功で `true`、失敗で `false` を返し、`page_count` は失敗で `nil` を返します。**例外は外へ出しません**（本体のビルドパイプラインの途中から呼ばれるため）。失敗しても入力 PDF は書き換えません。
+
+`add_outline!` の `items` は `{ level:, text:, page: }` の配列です。壊れた項目（不正な UTF-8 のタイトル・範囲外ページ・空タイトル）は 1 件ずつ飛ばして残りを書き込み、飛ばした理由をログに出します。
 
 ## 設定
 
