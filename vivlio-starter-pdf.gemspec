@@ -14,8 +14,9 @@ Gem::Specification.new do |spec|
   spec.license = "AGPL-3.0-only"
   spec.required_ruby_version = ">= 3.4.0"
 
+  # homepage_uri は spec.homepage から自動で作られる。metadata にも同じ URL を書くと
+  # rubygems.org はどちらか片方しか表示せず、gem build が警告を出す
   spec.metadata["allowed_push_host"] = "https://rubygems.org"
-  spec.metadata["homepage_uri"] = spec.homepage
   spec.metadata["source_code_uri"] = "https://github.com/Atelier-Mirai/vivlio-starter-pdf"
   spec.metadata["changelog_uri"] = "https://github.com/Atelier-Mirai/vivlio-starter-pdf/blob/master/CHANGELOG.md"
   spec.post_install_message = <<~MESSAGE

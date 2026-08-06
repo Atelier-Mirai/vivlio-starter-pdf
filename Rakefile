@@ -8,6 +8,16 @@ require "rake/testtask"
 # 呼び出し」として通り、実行時に NameError になる——静的解析では捕まらない。
 SUPPORTED_RUBY_VERSIONS = %w[3.4.10 4.0.6].freeze
 
+# 別の Ruby を子プロセスで起動する以上、親の bundler 環境は必ず捨てる。
+# `bundle exec rake test` から呼ばれると、親（現在の Ruby）の bundler を
+# 子（別の Ruby）が読みに行き、テストが始まる前に LoadError で落ちる。
+# nil を渡すと、その環境変数は子から取り除かれる。
+UNBUNDLED_ENV = {
+  "RUBYOPT" => nil, "RUBYLIB" => nil, "GEM_HOME" => nil, "GEM_PATH" => nil,
+  "BUNDLE_GEMFILE" => nil, "BUNDLE_BIN_PATH" => nil, "BUNDLER_VERSION" => nil,
+  "BUNDLER_SETUP" => nil
+}.freeze
+
 namespace :test do
   # テストの実体。現在の Ruby で 1 回だけ走る（test:versions が各版でこれを呼ぶ）
   Rake::TestTask.new(:current) do |t|
@@ -29,7 +39,7 @@ namespace :test do
     # 版ごとに bundle が要る。未導入なら黙って入れる（その版の初回だけ時間がかかる）
     failed = SUPPORTED_RUBY_VERSIONS.reject do |version|
       puts "\n=== Ruby #{version} ==="
-      env = { "RBENV_VERSION" => version }
+      env = UNBUNDLED_ENV.merge("RBENV_VERSION" => version)
 
       unless system(env, "rbenv exec bundle check", out: File::NULL, err: File::NULL)
         next false unless system(env, "rbenv exec bundle install --quiet")
