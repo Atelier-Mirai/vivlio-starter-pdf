@@ -1,133 +1,55 @@
-# vivlio-starter-pdf 1.0.0 Release Note
+# vivlio-starter-pdf リリースノート
 
-## 🎉 最初のメジャーリリース
+書籍制作ツール **vivlio-starter** の AGPL 拡張プラグインです。HexaPDF を使い、隠しノンブル・PDF アウトライン・PDF → Markdown 変換（OCR 連携）を担当します。使い方は [README](README.md)、網羅的な変更履歴は [CHANGELOG](CHANGELOG.md) をご覧ください。
 
-vivlio-starter-pdf 1.0.0 をリリースできることを大変嬉しく思います。これは **vivlio-starter** の AGPL 拡張プラグインで、HexaPDF を活用した高度な PDF 解析・後処理機能を提供します。
-
-## 🚀 主要機能
-
-### PDF → Markdown 変換
-- HexaPDF でテキスト・画像を高精度に抽出
-- 精密な座標解析による行・段落の再構成
-- Markdown 形式での構造化出力
-
-### OCR 連携と日本語対応 🆕
-- スキャン PDF を自動検出
-- Tesseract による日本語 OCR 実行
-- OCR テキストの空白圧縮と括弧正規化
-- prh 辞書による誤読修正
-
-### 画像抽出と位置合わせ
-- PDF 内の XObject を解析し、WebP 形式で書き出し
-- テキスト行と画像の精密な座標マッピング
-- イラスト領域の自動検出と除外
-
-### 出版向け機能
-- **隠しノンブル**: 入稿用 PDF の塗り足し領域にページ番号をオーバーレイ
-- **PDF アウトライン**: HTML 見出しを解析し、PDF のブックマークツリーを構築
-
-## 📦 インストール
-
-```ruby
-# Gemfile
-gem 'vivlio-starter-pdf', '~> 1.0.0'
-```
-
-```bash
-bundle install
-```
-
-### 外部ツール（OCR 利用時）
-
-```bash
-brew install tesseract tesseract-lang poppler vips
-```
-
-## 💡 使用例
-
-### vivlio-starter との連携（プラグイン専用）
-
-```bash
-# Enhanced Mode で自動的に HexaPDF/OCR パイプラインを使用
-vs pdf:read document.pdf
-```
-
-### Ruby API
-
-```ruby
-require "vivlio/starter/pdf"
-
-# PDF → Markdown 変換
-result = Vivlio::Starter::PDF::Reader.new("input.pdf",
-  ocr: { mode: "auto", languages: ["jpn"], dpi: 300 }
-).execute
-
-# アウトライン付与
-provider = Vivlio::Starter::Pdf::EnhancedProvider.new
-provider.add_outline!(pdf_path, items, max_level: 3)
-
-# 隠しノンブル
-provider.stamp_nombre!(pdf_path, bleed_pt: 8.5)
-```
-
-## 🔧 設定
-
-`config/book.yml` の `pdf_read` セクションで挙動を制御：
-
-```yaml
-pdf_read:
-  text_area:
-    top_margin: 18
-    bottom_margin: 20
-    inner_margin: 15
-    outer_margin: 12
-  page_separator: false
-  ocr:
-    mode: auto
-    languages:
-      - japanese
-    dpi: 300
-    psm: 3
-    inline_image_text: include
-```
-
-## ✅ テスト品質
-
-- **網羅的なテストスイート**
-- **実環境での動作検証**
-- **外部ツール連携のテスト**
-
-## 🔄 0.1.0 からの変更点
-
-### 新機能
-- 完全な OCR 連携と日本語対応
-- 画像位置合わせの精密化
-- PDF アウトライン生成機能
-- 隠しノンブル機能
-
-### 改善
-- gemspec の RubyGems 公開設定
-- ドキュメントの整備
-- 外部ツールの自動案内
-
-## 🎯 実績
-
-- **vivlio-starter** Enhanced Mode で実稼働
-- **日本語出版** 向けの最適化完了
-- **HexaPDF** との高度な連携実現
-- **AGPL-3.0** ライセンス準拠
-
-## 📋 互換性
-
-- **Ruby**: 4.0+
-- **依存**: hexapdf (~> 1.0), ruby-vips (~> 2.2)
-- **外部ツール**: Tesseract, poppler, libvips（OCR 使用時）
-- **セマンティックバージョニング**: 1.x.x 系は後方互換性を保証
-
-## 🙏 感謝
-
-vivlio-starter-pdf の開発にあたり、HexaPDF の強力な PDF 処理能力と、日本語出版の現場でのニーズが大きな助けとなりました。特に OCR 連携と日本語テキスト処理についての知見は、本プラグインをより実用的なものにする上で不可欠でした。
+新しい版から順に並べています。
 
 ---
 
-**vivlio-starter-pdf 1.0.0**: 高度な PDF 処理のための強力な拡張プラグイン
+## 1.1.2 — 2026-08-06
+
+**細かな不具合修正が中心のリリースです。** ただし 1 件は成果物に直接影響するため、しおり付き PDF を作る方は更新をおすすめします。
+
+- **壊れた見出しが 1 つあると、しおりが丸ごと消えていた問題を直しました。** 見出しに不正な UTF-8 バイトが混ざると例外が最上位まで飛び、**PDF からしおりが全滅**していました。範囲外ページや空タイトルは 1 件ずつ飛ばす設計だったのに、ここだけ全体を巻き添えにしていたことになります。しかも PDF 自体は出来上がるため、**開いてみるまで誰も気付けません**。今は該当項目だけを飛ばし、どの見出しが原因かをログで知らせます
+- **想定外の型が項目に混ざると、アウトライン付与が止まっていた問題を直しました**（`TypeError`）
+- **必要な Ruby を 4.0 以上から 3.4 以上へ緩めました**（コード変更はゼロ、gemspec 1 行のみ）。本体の緩和に合わせたものです。本体だけ緩めても、プラグインが 4.0 以上のままでは 3.4 環境に入りません
+
+あわせて、これらを二度と起こさないための**堅牢性テスト 14 件**を `test/robustness/` に追加しました。守る約束は 2 つです。
+
+1. **公開 API は例外を外へ出さない。** 本体のビルドパイプラインの途中から呼ばれるため、1 つの PDF 操作が例外で飛ぶとビルド全体が落ちます。失敗は戻り値で伝えます
+2. **失敗しても入力を壊さない。** 読み込んだのと同じパスへ書き戻すので、途中で失敗して元 PDF が切り詰められると「ビルドは続いたのに成果物が壊れている」という最も気付きにくい事故になります
+
+上の 2 件は、このテストを書く過程で見つかりました。
+
+## 1.1.1 — 2026-06-23
+
+- **隠しノンブルを埋め込み可能なフォントで描画するようにしました（FT-02）。** HexaPDF 組込の標準 14 フォント `Helvetica` は PDF に埋め込まれず、印刷所入稿で「非埋め込みフォント」の差し戻しになっていました
+- 書籍プロジェクト直下に同梱の `stylesheets/fonts/hackgen35/HackGen35ConsoleNF-Regular.ttf` があれば、数字グリフのみをサブセット埋め込みします（増分は極小）。無ければ従来どおり `Helvetica` にフォールバックしてビルドを続けます
+
+## 1.1.0 — 2026-06-10
+
+- **名前空間を `VivlioStarter::Pdf` へ統一し、`lib/vivlio_starter/` 配下へ再編しました。** 1.0.0 以降で**唯一の非互換変更**です
+
+本体（`vs`）経由で使っている場合、影響はありません。**Ruby API を直接呼んでいる場合のみ**書き換えが必要です。
+
+| | 1.0.x | 1.1.0 以降 |
+|:---|:---|:---|
+| require | `require "vivlio/starter/pdf"` | `require "vivlio_starter/pdf"` |
+| 名前空間 | `Vivlio::Starter::PDF` と `Vivlio::Starter::Pdf` が混在 | `VivlioStarter::Pdf` に統一 |
+
+1.0.x では `PDF` と `Pdf` の 2 つの綴りが同居しており、どちらを書けばよいか実物を見ないと分からない状態でした。
+
+## 1.0.1 — 2026-03-21
+
+- **CLI を追加しました**（`vivlio-starter-pdf --version` / `--help`）。インストール直後に動作確認できます
+
+## 1.0.0 — 2026-03-21
+
+最初のメジャーリリースです。
+
+- **隠しノンブル** — 入稿用 PDF の塗り足し領域に、断裁されて消えるページ番号を刷り込みます
+- **PDF アウトライン** — 見出しから PDF のブックマークツリーを構築します
+- **PDF → Markdown 変換** — HexaPDF でテキスト・画像を座標付きで抽出します
+- **OCR 連携** — スキャン PDF を自動検出し、Tesseract で日本語 OCR を実行。空白圧縮・括弧正規化・prh 辞書による誤読修正まで行います
+- **画像抽出** — PDF 内の XObject を解析し、WebP 形式で書き出します
+- プラグイン専用設計。インストールされていれば本体が自動検出し、Standard Mode から Enhanced Mode へ切り替わります

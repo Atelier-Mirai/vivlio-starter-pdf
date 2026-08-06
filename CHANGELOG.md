@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+### Planned
+- パフォーマンス最適化（大規模 PDF 対応）
+- 追加 OCR エンジン対応
+- クラウド OCR サービス連携
+- PDF 暗号化対応
+
+## [1.1.2] - 2026-08-06
 
 ### Changed
 - **必要な Ruby を 4.0 以上から 3.4 以上へ緩めた** (`vivlio-starter-pdf.gemspec`): Ruby 4.0 固有の機能は使っていない。Prism のバージョン指定パースで全 13 ファイルを解析したところ 4.0.0 / 3.4.0 / 3.3.0 いずれも構文エラー 0 件で、実際の下限を決めていたのは `it`（暗黙ブロック引数・38 箇所）**単独**だった。`it` は 3.3 でも構文エラーにならず実行時 `NameError` になる——静的解析では見つからないので、Ruby 3.4.10 で実走して全テスト通過を確認している。コード変更はゼロ（gemspec 1 行のみ）。本体 `vivlio-starter` の緩和に合わせたもので、本体だけ緩めてもプラグインが `>= 4.0` のままでは 3.4 環境に入らない。
@@ -86,13 +92,3 @@ vivlio-starter-pdf 1.0.0 としてリリース！HexaPDF を活用した高度�
 - 日本語テキストの空白圧縮処理
 - 括弧の正規化と誤読修正
 - 出版向けの文字処理最適化
-
----
-
-## [Unreleased]
-
-### Planned
-- パフォーマンス最適化（大規模 PDF 対応）
-- 追加 OCR エンジン対応
-- クラウド OCR サービス連携
-- PDF 暗号化対応

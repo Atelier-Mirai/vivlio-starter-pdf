@@ -5,8 +5,8 @@ require_relative "lib/vivlio_starter/cli/pdf/version"
 Gem::Specification.new do |spec|
   spec.name = "vivlio-starter-pdf"
   spec.version = VivlioStarter::Pdf::VERSION
-  spec.authors = ["Mirai"]
-  spec.email = ["mirai@example.com"]
+  spec.authors = ["Atelier Mirai"]
+  spec.email = ["contact@atelier-mirai.net"]
 
   spec.summary = "Advanced PDF processor for vivlio-starter using HexaPDF"
   spec.description = "Provides PDF outline extraction, precision page numbering, and OCR via HexaPDF. AGPL-3.0 licensed."
@@ -17,6 +17,7 @@ Gem::Specification.new do |spec|
   spec.metadata["allowed_push_host"] = "https://rubygems.org"
   spec.metadata["homepage_uri"] = spec.homepage
   spec.metadata["source_code_uri"] = "https://github.com/Atelier-Mirai/vivlio-starter-pdf"
+  spec.metadata["changelog_uri"] = "https://github.com/Atelier-Mirai/vivlio-starter-pdf/blob/master/CHANGELOG.md"
   spec.post_install_message = <<~MESSAGE
     [vivlio-starter-pdf]
     Enhanced Mode の OCR には外部ツール（tesseract / tesseract-lang / poppler / vips）が必要です。
