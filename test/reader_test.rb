@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "fileutils"
 require "open3"
 require "tmpdir"
 require "test_helper"
@@ -311,6 +312,50 @@ class ReaderTest < Minitest::Test
       refute_empty(result[:images])
       assert_includes(result[:markdown], "![](images/10-three-elements-ocr/")
       assert(File.exist?(result[:images].first[:output_path]))
+    end
+  end
+
+  # OCR の誤認識補正が config/ocr_corrections.yml から読まれ、OCR テキストに当たることを検証する。
+  # 以前はプロジェクトの prh 校正辞書（textlint_prh.yml）を見ており、改名後は表が空のまま
+  # 気づかれずに素通りしていた。あわせて、当てすぎないこと（言語芸術・Al）も確かめる
+  def test_postprocess_ocr_text_applies_corrections_from_project_config
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "config"))
+      File.write(File.join(dir, "config", "ocr_corrections.yml"), <<~YAML)
+        version: 1
+        rules:
+          - expected: 人工知能
+            patterns:
+              - 入工知能
+          - expected: 語彙
+            patterns:
+              - /語芸(?!術)/
+          - expected: プログラミング
+            patterns:
+              - /(?<![ァ-ヶー])ログラミング/
+      YAML
+
+      reader = VivlioStarter::Pdf::Reader.new("dummy.pdf")
+      Dir.chdir(dir) do
+        assert_equal("人工知能の研究", reader.send(:postprocess_ocr_text, "入工知能の研究"))
+        assert_equal("語彙が豊かだ", reader.send(:postprocess_ocr_text, "語芸が豊かだ"))
+        assert_equal("プログラミング入門", reader.send(:postprocess_ocr_text, "ログラミング入門"))
+
+        assert_equal("言語芸術としての詩", reader.send(:postprocess_ocr_text, "言語芸術としての詩"),
+                     "「語芸」を含むが別語なので直さない")
+        assert_equal("アナログラミング", reader.send(:postprocess_ocr_text, "アナログラミング"),
+                     "直前がカタカナなら「プ」の欠落ではない")
+      end
+    end
+  end
+
+  # 補正表が無いプロジェクト（1.0 より前の雛形）では、補正せずに素通りさせる
+  def test_postprocess_ocr_text_passes_through_without_corrections_file
+    Dir.mktmpdir do |dir|
+      reader = VivlioStarter::Pdf::Reader.new("dummy.pdf")
+      Dir.chdir(dir) do
+        assert_equal("入工知能の研究", reader.send(:postprocess_ocr_text, "入工知能の研究"))
+      end
     end
   end
 

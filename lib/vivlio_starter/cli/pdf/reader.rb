@@ -316,7 +316,7 @@ module VivlioStarter
       end
 
       # OCR を実行してページコンテンツを再構築する
-      # テキスト後処理（空白圧縮・括弧正規化・prh 辞書置換）を適用する
+      # テキスト後処理（空白圧縮・括弧正規化・誤認識の補正）を適用する
       def extract_page_ocr_content(page, index, image_occurrences)
         result = ocr_page_result(page, index)
         lines = normalize_ocr_lines(result.lines)
@@ -1015,7 +1015,7 @@ module VivlioStarter
       end
 
       # OCR テキストの後処理パイプライン
-      # 日本語スペース除去 → 断片結合 → 括弧正規化 → prh 辞書置換
+      # 日本語スペース除去 → 断片結合 → 括弧正規化 → 誤認識の補正
       def postprocess_ocr_text(text)
         sanitized = sanitize(text)
         return "" if sanitized.empty?
@@ -1023,7 +1023,7 @@ module VivlioStarter
         sanitized = collapse_ocr_japanese_spaces(sanitized)
         sanitized = collapse_fragmented_words(sanitized)
         sanitized = normalize_ocr_brackets(sanitized)
-        sanitized = apply_prh_replacements(sanitized)
+        sanitized = apply_ocr_corrections(sanitized)
         sanitize(sanitized)
       end
 
@@ -1060,18 +1060,27 @@ module VivlioStarter
         end
       end
 
-      # prh 辞書の置換ルールをテキストに適用する
-      def apply_prh_replacements(text)
-        prh_replacements.reduce(text.to_s) do |memo, (matcher, expected)|
+      # OCR の誤認識を補正する表を当てる。
+      #
+      # **当てるのは OCR したページのテキストだけ**で、著者が自分で書いた原稿には触れない。
+      # 以前はこれをプロジェクトの prh 辞書（校正辞書）から読んでいたが、校正辞書は
+      # 全原稿に当たるため、アルミニウムの元素記号 `Al` が `AI` へ、「言語芸術」が
+      # 「言語彙術」へ書き換えられていた。走査の誤りと表記の方針は別物なので表を分けた。
+      def apply_ocr_corrections(text)
+        ocr_corrections.reduce(text.to_s) do |memo, (matcher, expected)|
           memo.gsub(matcher, expected)
         end
       end
 
-      # config/textlint_prh.yml から prh 置換ルールを読み込む（メモ化）
-      # 各ルールの patterns を Regexp にコンパイルし、[matcher, expected] の配列を返す
-      def prh_replacements
-        @prh_replacements ||= begin
-          path = File.join(Dir.pwd, "config", "textlint_prh.yml")
+      # 補正表の既定の置き場。プロジェクトごとに育てるものなので gem には持たせない
+      OCR_CORRECTIONS_FILE = File.join("config", "ocr_corrections.yml")
+
+      # config/ocr_corrections.yml から補正ルールを読み込む（メモ化）。
+      # 各ルールの patterns を Regexp にコンパイルし、[matcher, expected] の配列を返す。
+      # ファイルが無いプロジェクト（1.0 より前の雛形）では補正せずに素通りさせる
+      def ocr_corrections
+        @ocr_corrections ||= begin
+          path = File.join(Dir.pwd, OCR_CORRECTIONS_FILE)
           unless File.file?(path)
             []
           else
@@ -1081,7 +1090,7 @@ module VivlioStarter
               next [] if expected.empty?
 
               Array(rule["patterns"]).filter_map do |pattern|
-                matcher = compile_prh_pattern(pattern)
+                matcher = compile_correction_pattern(pattern)
                 matcher ? [matcher, expected] : nil
               end
             end
@@ -1091,9 +1100,9 @@ module VivlioStarter
         end
       end
 
-      # prh パターンを Regexp にコンパイルする
+      # 補正パターンを Regexp にコンパイルする
       # "/pattern/" 形式は正規表現、それ以外はリテラルマッチ
-      def compile_prh_pattern(pattern)
+      def compile_correction_pattern(pattern)
         case pattern
         in Regexp then pattern
         else
