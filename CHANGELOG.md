@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **統合テストが、どの環境でも一度も走っていなかった** (`test/reader_test.rb`): fixture が隣の repo（`../vivlio-starter/sources/*.pdf`）を指していたが、その PDF は**どこにも存在しなかった**。`File.exist?` が false を返して skip するだけなので赤くならず、**この gem の中核である `reader.rb`（1,262 行）の通し経路は未検証のまま**だった。1.1.3 で直した OCR 補正の不具合も、それを捕まえるはずのテストが止まっていた。
 
-  fixture を `test/fixtures/` へ同梱し、組み立て手順を `build_fixtures.rb` に残した。読む側が HexaPDF なので、作る側は Prawn にしてある——同じ実装で作って読むと、その実装の癖が打ち消し合って検証から外れる。OCR 用には文字レイヤーを持たない PDF（`scanned.pdf`）を焼いた。テストは **34 runs / 2 skips → 36 runs / 0 skips** になった。
+  fixture を `test/fixtures/` へ同梱し、組み立て手順を `build_fixtures.rb` に残した。読む側が HexaPDF なので、作る側は Prawn にしてある——同じ実装で作って読むと、その実装の癖が打ち消し合って検証から外れる。OCR 用には文字レイヤーを持たない PDF（`scanned.pdf`）を焼いた。テストは **34 runs / 2 skips → 37 runs / 0 skips** になった。
 
 - **Minitest 6 でテストが起動しなくなる状態だった** (`test/test_helper.rb`): `Object#stub` を使いながら `minitest/mock` を読んでいなかった。5 は autorun がついでに読むので通り、6 は `Dropped minitest/mock.rb. This has been extracted to the minitest-mock gem.`（History.rdoc）で読まれない。`bundle exec` 有無で結果が変わる状態でもあった。明示的に require し、`minitest-mock` を開発依存へ加えた。
 

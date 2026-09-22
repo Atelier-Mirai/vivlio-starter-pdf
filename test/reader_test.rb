@@ -12,6 +12,8 @@ class ReaderTest < Minitest::Test
   SAMPLE_PDF = File.expand_path("fixtures/sample.pdf", __dir__)
   # 文字レイヤーを持たない PDF。OCR を通さない限り 1 文字も取り出せない
   OCR_SAMPLE_PDF = File.expand_path("fixtures/scanned.pdf", __dir__)
+  # OCR 結果を文字レイヤーとして埋め戻した PDF（字の間に空白が入っている）
+  FRAGMENTED_PDF = File.expand_path("fixtures/fragmented.pdf", __dir__)
 
   # execute が page_texts と pages を正しく返すことを検証する
   def test_execute_returns_page_texts_and_pages_for_sample_pdf
@@ -43,6 +45,23 @@ class ReaderTest < Minitest::Test
       assert(File.exist?(first_image[:output_path]))
     end
   end
+
+# OCR 結果を埋め戻した PDF は、字の間に空白が入る。そのまま Markdown にすると
+# 読めないので、読み取りの途中で詰め直す（collapse_ocr_japanese_spaces /
+# collapse_fragmented_words / normalize_ocr_brackets）。
+#
+# **この 3 つは、どのテストからも呼ばれていなかった。** 実物の PDF が repo に
+# 無く、通し経路のテストが skip し続けていたためである。
+def test_execute_collapses_spaces_scattered_between_characters
+  text = VivlioStarter::Pdf::Reader.new(FRAGMENTED_PDF).execute[:page_texts].first
+
+  assert_includes(text, "日本語を自然に使いこなせます。")
+  # 英字の断片も詰める。CSS が "CS S" のまま残らないこと
+  assert_includes(text, "HTMLやCSS")
+  # CJK を含む半角括弧は全角へ寄せる
+  assert_includes(text, "（何ができるのか）")
+  refute_match(/日 本 語/, text)
+end
 
   # OCR auto モードが断片化したテキストに対して Tesseract 出力を優先することを検証する
   def test_ocr_auto_prefers_tesseract_output_for_fragmented_text

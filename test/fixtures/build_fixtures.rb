@@ -100,3 +100,34 @@ Dir.mktmpdir do |work|
 end
 
 puts "作成しました: #{scanned}"
+
+# --- 文字が 1 字ずつ離れた文字レイヤーを持つ PDF（OCR 補正の経路を見る） ---
+#
+# スキャン紙を OCR にかけ、その結果を文字レイヤーとして埋め戻した PDF は、この形に
+# なる。読み取ると「で す。 日 本語 を 自然 に」のように字の間に空白が入るので、
+# そのまま Markdown にすると読めない。collapse_ocr_japanese_spaces と
+# collapse_fragmented_words が詰め直す担当だが、**どちらもテストから一度も
+# 呼ばれていなかった**（実物の PDF がここに無かったため）。
+#
+# 実際の OCR 出力を見て形を写した。字の間に空白を撒き、括弧は半角で置く。
+# **1 行が版面に収まる長さにする。** はみ出すと Prawn が折り返し、読み取り側の
+# 行まとめと絡んで「補正が効いたのか、折り返しがそう見せたのか」が分からなくなる。
+# ここで見たいのは詰め直しだけなので、要因を 1 つに絞る。
+FRAGMENTED_LINES = [
+  "日 本 語 を 自 然 に 使 い こ な せ ま す。",
+  "H T M L や CS S の 文 法 も 身 に つ き ま す。",
+  "(何 が で き る の か) を 理 解 し ま す。"
+].freeze
+
+fragmented = File.join(FIXTURE_DIR, "fragmented.pdf")
+Prawn::Document.generate(fragmented, page_size: [420, 595], margin: 40) do |pdf|
+  pdf.font_families.update("HackGen" => { normal: FONT_PATH })
+  pdf.font("HackGen")
+
+  FRAGMENTED_LINES.each do |line|
+    pdf.text line, size: 10
+    pdf.move_down 6
+  end
+end
+
+puts "作成しました: #{fragmented}"
