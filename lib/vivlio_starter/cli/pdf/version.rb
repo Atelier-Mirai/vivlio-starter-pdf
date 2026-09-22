@@ -2,6 +2,6 @@
 
 module VivlioStarter
   module Pdf
-    VERSION = "2.0.0"
+    VERSION = "1.2.0"
   end
 end

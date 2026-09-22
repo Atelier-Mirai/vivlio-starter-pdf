@@ -13,12 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - クラウド OCR サービス連携
 - PDF 暗号化対応
 
-## [2.0.0] - 2026-09-23
+## [1.2.0] - 2026-09-23
 
 ### Removed
 - **隠しノンブルの書き込み（`stamp_nombre!`）を削除した** (`enhanced_provider.rb`): 本体はすでに Prawn ＋ `qpdf --overlay` の MIT 共通実装へ移しており、**プラグインのこのメソッドはどこからも呼ばれていなかった**。139 行のうち 92 行が到達不能なまま残り、テスト 2 件がそれを検証して緑を出していた——動かない機能を確かめる緑は、あるほうが害になる。
 
-  本体が `Pdf.provider` に委ねるのは `page_count` / `ensure_blank_page_pdf` / `add_outline!` の 3 つだけである。ノンブルを戻す予定は無い。プラグインの有無で成果物が変わらないほうがよい種類の処理で、CombinePDF が named destinations を再構築しない問題もそれで解消している。**公開 API を減らすため major を上げる。**
+  本体が `Pdf.provider` に委ねるのは `page_count` / `ensure_blank_page_pdf` / `add_outline!` の 3 つだけである。ノンブルを戻す予定は無い。プラグインの有無で成果物が変わらないほうがよい種類の処理で、CombinePDF が named destinations を再構築しない問題もそれで解消している。公開 API が 1 つ減るので SemVer なら major だが、**1.2.0 とした**。呼び出しうるのは本体 `vivlio-starter` だけで、その本体はすでに呼んでいない。本体が 1.0.0 を迎えるのに合わせて配るため、プラグインだけが 2.0.0 になる並びを避けた。
 
 ### Fixed
 - **統合テストが、どの環境でも一度も走っていなかった** (`test/reader_test.rb`): fixture が隣の repo（`../vivlio-starter/sources/*.pdf`）を指していたが、その PDF は**どこにも存在しなかった**。`File.exist?` が false を返して skip するだけなので赤くならず、**この gem の中核である `reader.rb`（1,262 行）の通し経路は未検証のまま**だった。1.1.3 で直した OCR 補正の不具合も、それを捕まえるはずのテストが止まっていた。
@@ -35,7 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **rubocop を入れた**（`.rubocop.yml`・`rake rubocop`・CI）。見るのは `Lint` と `Security` だけで、引用符や行数は見ない。読みやすさを削ってまで様式に従うものではなく、本体 `vivlio-starter` も同じ構えを採っている。現状 0 件。
 - **README を実装に合わせた**: 機能表から隠しノンブルを外し、OCR 補正の出どころを `config/ocr_corrections.yml` と明記した（1.1.3 で prh 辞書から移したのに README が追随していなかった）。
 
-## [1.1.3] - 2026-09-18
+## [1.1.3] - 2026-09-18 (未公開)
+
+> rubygems へは出していない。ここに書いた修正は 1.2.0 に含めて配る。利用者から見た更新は 1.1.2 → 1.2.0 になるため、リリースノートでは 1.2.0 の節でまとめて説明している。
 
 ### Fixed
 - **OCR の誤認識補正が 2026-08-04 から一度も効いていなかったのを直した** (`reader.rb`): 補正表の読み込み先が `config/textlint_prh.yml` と決め打ちで、本体側の `6bbc2007`「校正まわりの設定ファイル名を対にする」でこのファイルが `textlint_rewrite.yml` へ改名された際に取り残されていた。`File.file?` が false を返すので例外も警告も出ず、**空の表を当てて素通りする**——気付けない形で壊れていた。`vs pdf:read` の統合テストが「ログラミング技術習得の三要素」（先頭の「プ」が落ちたまま）を期待していたのが、動いていなかった証拠である。
