@@ -47,7 +47,15 @@ Gem::Specification.new do |spec|
   spec.add_dependency "ruby-vips", "~> 2.2"
 
   # Development dependencies
-  spec.add_development_dependency "minitest", "~> 5.20"
+  spec.add_development_dependency "minitest", ">= 5.20"
+  # Minitest 6 は minitest/mock を本体から外し、この gem へ分離した
+  # （History.rdoc: "Dropped minitest/mock.rb. This has been extracted to the minitest-mock gem."）。
+  # 5 では autorun がついでに読んでいたので、書かなくても Object#stub が使えていた
+  spec.add_development_dependency "minitest-mock", "~> 5.27"
   spec.add_development_dependency "minitest-reporters", "~> 1.7"
   spec.add_development_dependency "rake", "~> 13.1"
+  # fixture の PDF を組み立てるのに使う（HexaPDF で作って HexaPDF で読むと
+  # 同じ実装の癖を検証から外せないため、生成側は別のライブラリにする）
+  spec.add_development_dependency "prawn", "~> 2.5"
+  spec.add_development_dependency "rubocop", "~> 1.81"
 end

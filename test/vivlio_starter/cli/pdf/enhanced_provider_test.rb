@@ -4,79 +4,93 @@ require "test_helper"
 require "vivlio_starter/cli/pdf/enhanced_provider"
 require "hexapdf"
 require "tmpdir"
-require "fileutils"
 
 module VivlioStarter
   module Pdf
-    # EnhancedProvider のテストスイート（隠しノンブルのフォント埋め込み = FT-02）
+    # EnhancedProvider が本体へ約束している 3 つの入口を固定する。
+    #
+    # 本体が `Pdf.provider` に委ねるのはこの 3 つだけで、それ以外の PDF 操作は
+    # プラグインの有無で結果が変わらないよう本体側（MIT）に置かれている。
+    # ここが変わるとプラグインを入れた機械と入れていない機械で成果物が食い違う。
     class EnhancedProviderTest < Minitest::Test
-      # 隠しノンブル用の同梱 TTF。書籍プロジェクト（sibling の vivlio-starter）から借用する。
-      FONT_SOURCE = File.expand_path(
-        "../../../../../vivlio-starter/stylesheets/fonts/hackgen35/HackGen35ConsoleNF-Regular.ttf",
-        __dir__
-      )
+      def setup
+        @provider = EnhancedProvider.new
+      end
 
-      # FT-02: プロジェクトに同梱 TTF があれば、ノンブルは TrueType としてサブセット
-      # 埋め込みされ、非埋め込みの Helvetica が PDF に残らない（入稿事故防止）。
-      def test_should_embed_nombre_font_when_bundled_ttf_is_available
-        skip "同梱フォントが見つかりません: #{FONT_SOURCE}" unless File.exist?(FONT_SOURCE)
-
+      def test_page_count_returns_the_number_of_pages
         Dir.mktmpdir do |dir|
-          Dir.chdir(dir) do
-            FileUtils.mkdir_p(File.join("stylesheets", "fonts", "hackgen35"))
-            FileUtils.cp(FONT_SOURCE, EnhancedProvider::NOMBRE_FONT_RELATIVE)
-            pdf_path = create_pdf("t.pdf", 2)
+          path = create_pdf(File.join(dir, "three.pdf"), 3)
 
-            assert EnhancedProvider.new.stamp_nombre!(pdf_path, bleed_pt: 8.5)
-
-            summary = font_summary(pdf_path)
-            assert summary[:embedded_truetype],
-                   "ノンブルが TrueType としてサブセット埋め込みされていること（FontFile2）"
-            assert(summary[:base_fonts].any? { it.include?("HackGen") },
-                   "ノンブルが HackGen35ConsoleNF で描画されていること: #{summary[:base_fonts]}")
-            refute(summary[:base_fonts].any? { it.include?("Helvetica") },
-                   "非埋め込み Helvetica が残っていないこと（FT-02 回帰）: #{summary[:base_fonts]}")
-          end
+          assert_equal 3, @provider.page_count(path)
         end
       end
 
-      # 同梱 TTF が無い環境でも、ノンブル書き込み自体は Helvetica で継続する（後方互換）。
-      def test_should_fall_back_to_helvetica_when_font_is_missing
+      def test_ensure_blank_page_pdf_creates_a_pdf_of_the_given_size
         Dir.mktmpdir do |dir|
-          Dir.chdir(dir) do
-            pdf_path = create_pdf("t.pdf", 1)
+          path = File.join(dir, "blank.pdf")
 
-            assert EnhancedProvider.new.stamp_nombre!(pdf_path, bleed_pt: 8.5),
-                   "フォント未配置でもノンブル書き込みは成功すること"
-          end
+          @provider.ensure_blank_page_pdf(path, 533, 745)
+
+          assert_path_exists path
+          box = HexaPDF::Document.open(path).pages.first.box(:media)
+          assert_equal 533, box.width.round
+          assert_equal 745, box.height.round
+        end
+      end
+
+      # 既にあるファイルは作り直さない。空白ページはビルド中に何度も要求されるため、
+      # 毎回書き直すとページの内容が入れ替わる余地が生まれる。
+      def test_ensure_blank_page_pdf_keeps_an_existing_file
+        Dir.mktmpdir do |dir|
+          path = create_pdf(File.join(dir, "blank.pdf"), 2)
+          before = File.read(path, mode: "rb")
+
+          @provider.ensure_blank_page_pdf(path, 533, 745)
+
+          assert_equal before, File.read(path, mode: "rb")
+        end
+      end
+
+      def test_add_outline_writes_a_bookmark_tree
+        Dir.mktmpdir do |dir|
+          path = create_pdf(File.join(dir, "book.pdf"), 3)
+          items = [
+            { level: 1, text: "第 1 章", page: 1 },
+            { level: 2, text: "1.1 節", page: 2 },
+            { level: 1, text: "第 2 章", page: 3 }
+          ]
+
+          assert @provider.add_outline!(path, items, max_level: 3)
+
+          assert_equal ["第 1 章", "1.1 節", "第 2 章"], outline_titles(path)
+        end
+      end
+
+      # 有効な項目が 1 つも無いなら false を返し、空のしおりツリーを残さない。
+      # 空のツリーがあると PDF ビューアが「しおり有り」と表示して中身が空になる。
+      def test_add_outline_returns_false_when_no_item_is_valid
+        Dir.mktmpdir do |dir|
+          path = create_pdf(File.join(dir, "book.pdf"), 1)
+
+          refute @provider.add_outline!(path, [{ level: 1, text: "", page: 1 }], max_level: 3)
         end
       end
 
       private
 
       # 指定ページ数の空白 PDF を生成して返す
-      def create_pdf(name, page_count)
+      def create_pdf(path, page_count)
         document = HexaPDF::Document.new
         page_count.times { document.pages.add([0, 0, 533, 745]) }
-        document.write(name, optimize: true)
-        name
+        document.write(path, optimize: true)
+        path
       end
 
-      # PDF 内の全オブジェクトを走査し、BaseFont 名一覧と FontFile2 の有無を集計する。
-      def font_summary(pdf_path)
-        document = HexaPDF::Document.open(pdf_path)
-        base_fonts = []
-        embedded_truetype = false
-
-        document.each do |obj|
-          value = obj.value
-          next unless value.is_a?(Hash)
-
-          base_fonts << value[:BaseFont].to_s if value[:BaseFont]
-          embedded_truetype = true if value.key?(:FontFile2)
-        end
-
-        { base_fonts: base_fonts.uniq, embedded_truetype: }
+      # しおりの見出しを並べる。each_item はツリーを深さ優先で最後までたどるので、
+      # ここで再帰を重ねると子が二度数えられる
+      def outline_titles(path)
+        document = HexaPDF::Document.open(path)
+        document.catalog[:Outlines].each_item.map { it[:Title].to_s }
       end
     end
   end

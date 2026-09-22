@@ -192,9 +192,10 @@ module VivlioStarter
           line
             .to_s
             .gsub(/[ \t\u00A0]+/, " ")
-            .gsub(/(?<=[一-龯ぁ-ゖァ-ヶー々〆ヵヶ]) (?=[一-龯ぁ-ゖァ-ヶー々〆ヵヶ])/, "")
-            .gsub(/(?<=[一-龯ぁ-ゖァ-ヶー々〆ヵヶ]) (?=[、。，．：；！？）】』」])/, "")
-            .gsub(/(?<=[（【『「]) (?=[一-龯ぁ-ゖァ-ヶー々〆ヵヶA-Za-z0-9])/, "")
+            # ヵヶ は ァ-ヶ の範囲に含まれるので並べない（重複範囲の警告が出る）
+            .gsub(/(?<=[一-龯ぁ-ゖァ-ヶー々〆]) (?=[一-龯ぁ-ゖァ-ヶー々〆])/, "")
+            .gsub(/(?<=[一-龯ぁ-ゖァ-ヶー々〆]) (?=[、。，．：；！？）】』」])/, "")
+            .gsub(/(?<=[（【『「]) (?=[一-龯ぁ-ゖァ-ヶー々〆A-Za-z0-9])/, "")
             .strip
         end
 
@@ -1028,7 +1029,9 @@ module VivlioStarter
       end
 
       # --- OCR テキスト補正用の文字クラス正規表現 ---
-      CJK_CHAR = /[\p{Han}\p{Hiragana}\p{Katakana}ー々〆ヵヶ]/.freeze
+      # 足すのは `\p{...}` に入らない 2 文字だけ。々 は \p{Han}、ヵヶ は \p{Katakana} に
+      # 含まれるため、並べると「character class has duplicated range」が毎回 5 行出る。
+      CJK_CHAR = /[\p{Han}\p{Hiragana}\p{Katakana}ー〆]/.freeze
       JP_PUNCT = /[、。，．：；！？!?…]/.freeze
       JP_OPEN  = /[「『（【《〈]/.freeze
       JP_CLOSE = /[」』）】》〉]/.freeze

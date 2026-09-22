@@ -7,23 +7,23 @@ require_relative "outline_writer"
 
 module VivlioStarter
   module Pdf
-    # vivlio-starter 本体から呼び出される HexaPDF ベースのプロバイダ
+    # vivlio-starter 本体から呼び出される HexaPDF ベースのプロバイダ。
     #
-    # 隠しノンブル書き込み・PDF アウトライン付与など、
-    # Enhanced Mode 固有の PDF 操作を提供する。
+    # 本体が委ねるのは 3 つだけである（`Pdf.provider` 経由）。
+    #
+    #   page_count             ページ数
+    #   ensure_blank_page_pdf  空白ページ PDF の生成
+    #   add_outline!           しおり（PDF アウトライン）の付与
+    #
+    # **隠しノンブルはここには無い。** かつては本体が委譲していたが、CombinePDF が
+    # 保存時に named destinations を再構築しない問題があり、本体は Prawn ＋
+    # `qpdf --overlay`（構造保存・等倍）の MIT 共通実装へ移した。プラグインの
+    # 有無で成果物が変わらないほうがよい種類の処理なので、戻す予定は無い。
+    #
+    # このクラスの約束は 2 つ。**例外を外へ出さない**（本体のビルドパイプラインの
+    # 途中から呼ばれるため、失敗は戻り値で伝える）。**失敗しても入力を壊さない**
+    # （読み込んだのと同じパスへ書き戻すため、途中失敗は最も気付きにくい事故になる）。
     class EnhancedProvider
-      # 隠しノンブルに使う埋め込み可能フォント（書籍プロジェクト同梱の TTF）。
-      # HexaPDF 組込の "Helvetica" は標準 14 フォントで PDF に埋め込まれず、印刷所入稿で
-      # 「非埋め込みフォント」事故になる（FT-02）。プロジェクト直下に同梱の
-      # HackGen35ConsoleNF があれば登録してサブセット埋め込みする（数字のみで極小）。
-      NOMBRE_FONT_RELATIVE = File.join("stylesheets", "fonts", "hackgen35", "HackGen35ConsoleNF-Regular.ttf")
-      # document.config の font.map へ登録する内部フォント名
-      NOMBRE_FONT_NAME = "VivlioNombre"
-      # 同梱フォントが見つからない場合のフォールバック（非埋め込み標準フォント）
-      FALLBACK_FONT_NAME = "Helvetica"
-      # 隠しノンブルのフォントサイズ（pt）
-      FONT_SIZE_PT = 6
-
       # PDF のページ数を取得する
       def page_count(pdf_path)
         Utilities.page_count(pdf_path)
@@ -32,34 +32,6 @@ module VivlioStarter
       # 空白ページ PDF が存在しなければ生成する
       def ensure_blank_page_pdf(path, width_pt, height_pt)
         Utilities.ensure_blank_page_pdf(path, width_pt, height_pt)
-      end
-
-      # PDF の各ページに隠しノンブル（ページ番号）を書き込む
-      # 奇数ページは左端、偶数ページは右端に 90° 回転して配置する
-      # @param pdf_path [String] 対象 PDF のパス
-      # @param bleed_pt [Float] 塗り足し幅（pt）
-      # @return [Boolean] 成功なら true
-      def stamp_nombre!(pdf_path, bleed_pt:)
-        return false unless File.exist?(pdf_path)
-
-        document = HexaPDF::Document.open(pdf_path)
-        total = document.pages.count
-        return false if total.zero?
-
-        LogHelper.log_action("[NombreStamper] 隠しノンブルを書き込みます（#{total} ページ）[Enhanced Mode]…")
-
-        font = register_nombre_font(document)
-
-        document.pages.each_with_index do |page, idx|
-          stamp_page(page, idx + 1, bleed_pt: bleed_pt.to_f, font:)
-        end
-
-        document.write(pdf_path, optimize: true)
-        LogHelper.log_success("[NombreStamper] 隠しノンブル書き込み完了（#{total} ページ）")
-        true
-      rescue StandardError => e
-        LogHelper.log_error("[NombreStamper] 隠しノンブル書き込みに失敗: #{e.message}")
-        false
       end
 
       # PDF にアウトライン（しおり）を付与する
@@ -88,47 +60,6 @@ module VivlioStarter
       end
 
       private
-
-      # 隠しノンブル用フォントを document へ登録し、canvas に渡すフォント名を返す。
-      # 同梱 TTF（NOMBRE_FONT_RELATIVE）があればサブセット埋め込みされる名前を、
-      # 見つからなければ非埋め込みの Helvetica（FALLBACK_FONT_NAME）を返す。
-      # @param document [HexaPDF::Document]
-      # @return [String] canvas.font に渡すフォント名
-      def register_nombre_font(document)
-        return FALLBACK_FONT_NAME unless File.exist?(NOMBRE_FONT_RELATIVE)
-
-        (document.config["font.map"] ||= {})[NOMBRE_FONT_NAME] = { none: NOMBRE_FONT_RELATIVE }
-        NOMBRE_FONT_NAME
-      end
-
-      # 1 ページに隠しノンブルを描画する
-      # 奇数ページは左端 90°、偶数ページは右端 -90° に回転配置する
-      def stamp_page(page, page_number, bleed_pt:, font:)
-        canvas = page.canvas(type: :overlay)
-        box = page.box(:media)
-
-        canvas.font(font, size: FONT_SIZE_PT)
-        canvas.fill_color(0)
-
-        x_offset = bleed_pt / 2.0
-        y_center = box.height / 2.0
-
-        if page_number.odd?
-          draw_rotated_text(canvas, page_number.to_s, x: x_offset, y: y_center, angle: 90)
-        else
-          draw_rotated_text(canvas, page_number.to_s, x: box.width - x_offset, y: y_center, angle: -90)
-        end
-      end
-
-      # キャンバス上の指定座標にテキストを回転描画する
-      def draw_rotated_text(canvas, text, x:, y:, angle:)
-        canvas
-          .save_graphics_state
-          .translate(x, y)
-          .rotate(angle)
-          .text(text, at: [0, 0])
-          .restore_graphics_state
-      end
 
       # OutlineWriter のスキップ通知をログに出力するコールバック
       def log_outline_skip(message)

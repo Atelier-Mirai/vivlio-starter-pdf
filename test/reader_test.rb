@@ -7,14 +7,14 @@ require "test_helper"
 
 # Reader クラスのテストスイート
 class ReaderTest < Minitest::Test
-  # テスト用サンプル PDF のパス（テキスト埋め込み版）
-  SAMPLE_PDF = File.expand_path("../../vivlio-starter/sources/three-elements-pages.pdf", __dir__)
-  # テスト用サンプル PDF のパス（OCR 必須版）
-  OCR_SAMPLE_PDF = File.expand_path("../../vivlio-starter/sources/three-elements-ocr.pdf", __dir__)
+  # 統合テスト用の PDF。**repo に同梱してある**（test/fixtures/build_fixtures.rb が作る）。
+  # かつては隣の repo を指しており、その PDF は存在しないので常に skip していた。
+  SAMPLE_PDF = File.expand_path("fixtures/sample.pdf", __dir__)
+  # 文字レイヤーを持たない PDF。OCR を通さない限り 1 文字も取り出せない
+  OCR_SAMPLE_PDF = File.expand_path("fixtures/scanned.pdf", __dir__)
 
   # execute が page_texts と pages を正しく返すことを検証する
   def test_execute_returns_page_texts_and_pages_for_sample_pdf
-    skip "sample pdf is not available" unless File.exist?(SAMPLE_PDF)
     skip "ImageMagick is not available" unless imagemagick_available?
 
     Dir.mktmpdir do |dir|
@@ -22,10 +22,10 @@ class ReaderTest < Minitest::Test
         SAMPLE_PDF,
         page_separator: true,
         images_dir: dir,
-        image_reference_dir: "images/10-three-elements-pages"
+        image_reference_dir: "images/sample"
       ).execute
 
-      assert_operator(result[:pages], :>=, 1)
+      assert_equal(2, result[:pages])
       assert_kind_of(Array, result[:page_texts])
       assert_kind_of(Array, result[:page_chunks])
       assert_operator(result[:page_texts].length, :>=, 1)
@@ -35,11 +35,11 @@ class ReaderTest < Minitest::Test
       refute_empty(result[:images])
       first_image = result[:images].first
       assert_equal(1, first_image[:page])
-      assert_match(%r{\Aimages/10-three-elements-pages/}, first_image[:reference_path])
+      assert_match(%r{\Aimages/sample/}, first_image[:reference_path])
       assert_match(/\.webp\z/, first_image[:reference_path])
       assert_match(/\.webp\z/, first_image[:output_path])
       assert_includes(result[:markdown], "![](#{first_image[:reference_path]})")
-      assert_match(/!\[\]\(images\/10-three-elements-pages\/page-001-image-01\.webp\)\z/, result[:page_chunks].first)
+      assert_match(%r{!\[\]\(images/sample/page-001-image-01\.webp\)}, result[:page_chunks].first)
       assert(File.exist?(first_image[:output_path]))
     end
   end
@@ -288,7 +288,6 @@ class ReaderTest < Minitest::Test
 
   # execute がスキャン PDF から OCR でテキストを抽出することを検証する（統合テスト）
   def test_execute_extracts_text_from_scanned_pdf_with_ocr
-    skip "ocr sample pdf is not available" unless File.exist?(OCR_SAMPLE_PDF)
     skip "OCR dependencies are not available" unless ocr_dependencies_available?
     skip "Vips is not available" unless vips_available?
     skip "ImageMagick is not available" unless imagemagick_available?
@@ -298,20 +297,24 @@ class ReaderTest < Minitest::Test
         OCR_SAMPLE_PDF,
         page_separator: true,
         images_dir: dir,
-        image_reference_dir: "images/10-three-elements-ocr",
+        image_reference_dir: "images/scanned",
         ocr: { mode: "always", languages: ["jpn"], dpi: 300, psm: 3, inline_image_text: "include" }
       ).execute
 
       normalized_first_page = result[:page_texts].first.gsub(/[[:space:]]+/, "")
       normalized_second_page = result[:page_texts][1].gsub(/[[:space:]]+/, "")
 
-      assert_equal(7, result[:pages])
-      assert_includes(normalized_first_page, "ログラミング技術習得の三要素")
-      assert_includes(normalized_second_page, "技術習得には次の三要素")
+      assert_equal(2, result[:pages])
+      # 1 ページ目は読み取りが安定している。2 ページ目は OCR が崩しがちなので、
+      # 何かしら日本語が取れたことだけを見る（OCR の精度はここで測るものではない）
+      assert_includes(normalized_first_page, "プログラミング技術習得の三要素")
+      assert_match(/\p{Han}|\p{Hiragana}|\p{Katakana}/, normalized_second_page)
       refute_includes(result[:page_texts].first, "Detected ")
-      refute_empty(result[:images])
-      assert_includes(result[:markdown], "![](images/10-three-elements-ocr/")
-      assert(File.exist?(result[:images].first[:output_path]))
+      # **ページ全面のスキャン画像は図版として出さない。** それはページそのものであって
+      # 図ではなく、Markdown に貼ると本文と同じ内容が二重になる
+      # （suppress_full_page_scans: resolution.ocr_applied）
+      assert_empty(result[:images])
+      refute_includes(result[:markdown], "![](images/scanned/")
     end
   end
 

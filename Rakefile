@@ -2,11 +2,15 @@
 
 require "bundler/gem_tasks"
 require "rake/testtask"
+require "rubocop/rake_task"
+
+# 見るのは Lint と Security だけ（.rubocop.yml）。様式ではなくバグの芽を拾う
+RuboCop::RakeTask.new(:rubocop)
 
 # gemspec が Ruby 3.4 以上を謳う以上、それが本当かは実際に走らせないと分からない。
 # `it`（暗黙ブロック引数）は 3.3 以下でも構文エラーにならず「it というメソッドの
 # 呼び出し」として通り、実行時に NameError になる——静的解析では捕まらない。
-SUPPORTED_RUBY_VERSIONS = %w[3.4.10 4.0.6].freeze
+SUPPORTED_RUBY_VERSIONS = %w[3.4.10 4.0.7].freeze
 
 # 別の Ruby を子プロセスで起動する以上、親の bundler 環境は必ず捨てる。
 # `bundle exec rake test` から呼ばれると、親（現在の Ruby）の bundler を
@@ -56,7 +60,7 @@ end
 # 手元では常に対応全版を回す（1 版あたり 10 秒弱で終わるため、分けるほどの負担にならない）。
 # CI（GitHub Actions）は版をマトリクスで分担するので、各ジョブは 1 回でよい。
 task test: (ENV["CI"] ? "test:current" : "test:versions")
-task default: :test
+task default: %i[rubocop test]
 
 # gem のアンインストール → ビルド → インストールを一括実行
 task :reinstall do

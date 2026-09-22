@@ -1,0 +1,19 @@
+# 見たいのは「バグの芽」だけである。引用符の種類や行数の上限は、読みやすさを
+# 削ってまで従うものではない（本体 vivlio-starter も同じ構えを採っている）。
+#
+# そこで既定を全部切り、Lint と Security の 2 部門だけを入れる。ここが鳴るのは
+# 「書いた人の意図と、Ruby が実際にすること」がずれている箇所なので、
+# 読んで判断する価値がある。
+AllCops:
+  DisabledByDefault: true
+  TargetRubyVersion: 3.4
+  SuggestExtensions: false
+  Exclude:
+    - "vendor/**/*"
+    - "tmp/**/*"
+
+Lint:
+  Enabled: true
+
+Security:
+  Enabled: true

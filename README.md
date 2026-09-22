@@ -14,8 +14,7 @@ vivlio-starter 本体（MIT）が提供する Standard Mode を拡張し、以�
 | **PDF → Markdown 変換** | HexaPDF でテキスト・画像を高精度に抽出し、Markdown に変換 |
 | **画像抽出（WebP 化）** | PDF 内の XObject を解析し、WebP 形式で書き出し |
 | **OCR 連携** | スキャン PDF を自動検出し、Tesseract で日本語 OCR を実行 |
-| **OCR テキスト補正** | 日本語空白圧縮、括弧正規化、prh 辞書による誤読修正 |
-| **隠しノンブル** | 入稿用 PDF の塗り足し領域にページ番号をオーバーレイ |
+| **OCR テキスト補正** | 日本語空白圧縮、括弧正規化、`config/ocr_corrections.yml` による誤読修正 |
 | **PDF アウトライン** | HTML 見出しを解析し、PDF のブックマークツリーを構築 |
 
 ## インストール
@@ -66,11 +65,14 @@ result = VivlioStarter::Pdf::Reader.new("input.pdf",
 provider = VivlioStarter::Pdf::EnhancedProvider.new
 provider.add_outline!(pdf_path, items, max_level: 3)
 
-# 隠しノンブル
-provider.stamp_nombre!(pdf_path, bleed_pt: 8.5)
+# ページ数
+provider.page_count(pdf_path)
 ```
 
-`stamp_nombre!` / `add_outline!` は成功で `true`、失敗で `false` を返し、`page_count` は失敗で `nil` を返します。**例外は外へ出しません**（本体のビルドパイプラインの途中から呼ばれるため）。失敗しても入力 PDF は書き換えません。
+`add_outline!` は成功で `true`、失敗で `false` を返し、`page_count` は失敗で `nil` を返します。**例外は外へ出しません**（本体のビルドパイプラインの途中から呼ばれるため）。失敗しても入力 PDF は書き換えません。
+
+> [!NOTE]
+> **隠しノンブルはこの gem にはありません。** かつては本体から委譲されていましたが、CombinePDF が保存時に named destinations を再構築しない問題があり、本体は Prawn ＋ `qpdf --overlay` の MIT 共通実装へ移しました。プラグインの有無で成果物が変わらないほうがよい処理なので、戻す予定はありません。
 
 `add_outline!` の `items` は `{ level:, text:, page: }` の配列です。壊れた項目（不正な UTF-8 のタイトル・範囲外ページ・空タイトル）は 1 件ずつ飛ばして残りを書き込み、飛ばした理由をログに出します。
 
@@ -116,7 +118,13 @@ pdf_read:
 git clone https://github.com/Atelier-Mirai/vivlio-starter-pdf.git
 cd vivlio-starter-pdf
 bundle install
-bundle exec rake test
+bundle exec rake        # rubocop（Lint / Security）+ 対応する全 Ruby でテスト
+```
+
+統合テストが読む PDF は `test/fixtures/` に同梱しています。中身を変えたいときだけ作り直してください（HackGen35 = SIL OFL-1.1 を埋め込みます）。
+
+```zsh
+bundle exec ruby test/fixtures/build_fixtures.rb
 ```
 
 ## ライセンス

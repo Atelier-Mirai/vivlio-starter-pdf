@@ -9,9 +9,9 @@
 #
 #   ここは本体（vivlio-starter）のビルドパイプラインから呼ばれる。1 つの PDF 操作が
 #   例外で飛ぶとビルド全体が落ちるため、**このプロバイダの公開 API は例外を外へ出さない**
-#   のが約束である（page_count は nil、stamp_nombre! / add_outline! は false）。
+#   のが約束である（page_count は nil、add_outline! は false）。
 #
-#   あわせて **入力ファイルを壊さないこと** を見る。stamp_nombre! も add_outline! も
+#   あわせて **入力ファイルを壊さないこと** を見る。add_outline! は
 #   読み込んだのと同じパスへ書き戻すため、失敗時に元 PDF が切り詰められると
 #   「ビルドは続いたが成果物が壊れた」という最悪の失敗になる。
 # ================================================================
@@ -39,19 +39,6 @@ class BrokenPdfTest < Minitest::Test
     end
   end
 
-  def test_stamp_nombre_returns_false_instead_of_raising
-    in_workdir do
-      make_broken_pdf("broken.pdf")
-      File.write("empty.pdf", "")
-
-      silently do
-        refute provider.stamp_nombre!("broken.pdf", bleed_pt: 3)
-        refute provider.stamp_nombre!("empty.pdf", bleed_pt: 3)
-        refute provider.stamp_nombre!("nosuch.pdf", bleed_pt: 3)
-      end
-    end
-  end
-
   def test_add_outline_returns_false_instead_of_raising
     in_workdir do
       make_broken_pdf("broken.pdf")
@@ -71,7 +58,6 @@ class BrokenPdfTest < Minitest::Test
       before = File.binread("broken.pdf")
 
       silently do
-        provider.stamp_nombre!("broken.pdf", bleed_pt: 3)
         provider.add_outline!("broken.pdf", [{ level: 1, text: "章", page: 1 }], max_level: 3)
       end
 
@@ -87,7 +73,7 @@ class BrokenPdfTest < Minitest::Test
 
       silently do
         assert_nil provider.page_count("enc.pdf")
-        refute provider.stamp_nombre!("enc.pdf", bleed_pt: 3)
+        refute provider.add_outline!("enc.pdf", [{ level: 1, text: "章", page: 1 }], max_level: 3)
       end
 
       assert_equal before, File.binread("enc.pdf"), "開けなかった PDF を書き換えてはならない"
@@ -101,7 +87,7 @@ class BrokenPdfTest < Minitest::Test
       before = File.binread("ro.pdf")
       skip_unless_permission_enforced("ro.pdf")
 
-      silently { refute provider.stamp_nombre!("ro.pdf", bleed_pt: 3) }
+      silently { refute provider.add_outline!("ro.pdf", [{ level: 1, text: "章", page: 1 }], max_level: 3) }
 
       assert_equal before, File.binread("ro.pdf")
     ensure
