@@ -483,6 +483,76 @@ end
     assert_equal({ text: "光の", x: 50.0, y: 680.0, width: 60.0, size: 20.0, conf: 95.5 }, words.first.to_h)
   end
 
+  # 囲みの地の割合は、紙の明るさ（中央値）より 10〜60 暗い面の割合で測る
+  def test_should_measure_tint_relative_to_paper_brightness
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
+    histogram = Array.new(256, 0)
+    histogram[230] = 80 # 紙
+    histogram[200] = 15 # 囲みの地（紙より 30 暗い）
+    histogram[20] = 5   # 文字
+
+    assert_in_delta(0.15, reader.send(:tint_ratio, histogram))
+  end
+
+  # 大津のしきい値は、文字と紙の明るさのあいだに来る
+  def test_should_find_otsu_threshold_between_text_and_paper
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
+    histogram = Array.new(256, 0)
+    histogram[30] = 20
+    histogram[220] = 80
+
+    assert_includes(30...220, reader.send(:otsu_threshold, histogram))
+  end
+
+  # 二度読みは、確信度の平均ではなく確信度の高い語の字数で選ぶ。平均で選ぶと、字を落とした読みを
+  # 選ぶことがある（絵の本の 40 ページ: 平均は二値化が高いが、字は 433 → 325 に減る）
+  def test_should_choose_reading_with_more_confident_characters
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
+    header = %w[level page_num block_num par_num line_num word_num left top width height conf text].join("\t")
+    tsv = ->(*words) { [header, *words.map { |conf, text| ["5", *Array.new(9, "1"), conf, text].join("\t") }].join("\n") }
+    many_words = tsv.(["85", "光の波を"], ["82", "追いかける"], ["60", "かすれ"])
+    few_words = tsv.(["97", "光の"])
+
+    assert_equal(9, reader.send(:confident_characters, many_words))
+    assert_equal(2, reader.send(:confident_characters, few_words))
+  end
+
+  # OCR するページごとに経過を (ページ番号, ページ数) で知らせる。OCR しないページでは呼ばない
+  def test_should_report_progress_for_pages_read_by_ocr
+    calls = []
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF, progress: ->(page, total) { calls << [page, total] })
+    reader.instance_variable_set(:@page_count, 24)
+    content = VivlioStarter::Pdf::Reader::PageContent.new(text: "", lines: [], image_occurrences: [])
+
+    reader.stub :ocr_required_for_page?, ->(_page, _content) { true } do
+      reader.stub :extract_page_ocr_content, [content, nil] do
+        reader.send(:resolve_page_content, nil, 4, content)
+      end
+    end
+    reader.stub :ocr_required_for_page?, false do
+      reader.send(:resolve_page_content, nil, 5, content)
+    end
+
+    assert_equal([[5, 24]], calls)
+  end
+
+  # 文字だけのページ（囲みの地が少ない）は二度読みしない
+  def test_should_read_once_when_page_has_little_tint
+    skip "Vips is not available" unless vips_available?
+
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "page.png")
+      reader.send(:require_vips!)::Image.black(200, 200).invert.write_to_file(path) # 真っ白な紙
+      calls = 0
+
+      reader.stub :run_tesseract, ->(*) { calls += 1 and ["", ""] } do
+        assert_equal(%w[text tsv], reader.send(:second_reading, path, dir, "text", "tsv"))
+      end
+      assert_equal(0, calls)
+    end
+  end
+
   private
 
   # ImageMagick（magick または convert）が PATH 上で利用可能かを確認する

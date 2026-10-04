@@ -19,7 +19,8 @@ module VivlioStarter
         'line_merge_tolerance' => ->(value) { Float(value) },
         'images_dir' => ->(value) { value },
         'image_reference_dir' => ->(value) { value },
-        'ocr' => ->(value) { JSON.parse(value) }
+        'ocr' => ->(value) { JSON.parse(value) },
+        'progress' => ->(value) { value == 'true' }
       }.freeze
 
       def self.run(args = [])
@@ -44,7 +45,9 @@ module VivlioStarter
         fail_with("PDF が見つかりません: #{pdf_path}") unless File.file?(pdf_path)
 
         options = parse_read_options(settings)
-        result = Reader.new(pdf_path, **options).execute
+        # 経過は標準エラーへ「progress: ocr 5/24」の形で書く。本体が --log のときに中継する
+        options[:progress] = options[:progress] ? ->(page, total) { $stderr.puts("progress: ocr #{page}/#{total}") || $stderr.flush } : nil
+        result = Reader.new(pdf_path, **options.compact).execute
         $stdout.write(JSON.generate(result))
       rescue JSON::ParserError, ArgumentError => e
         fail_with("read の設定を解釈できません: #{e.message}")

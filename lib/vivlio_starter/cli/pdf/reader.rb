@@ -43,6 +43,13 @@ module VivlioStarter
         def initialize(text:, lines:, blocks:, source_image_path:, image_width:, image_height:, temp_dir:, words: []) = super
       end
 
+      # --- 二度読み（§2.2） ---
+      # 囲みの地の割合がこれ以上のページだけ二度読みする。97 章のスキャンでは 23 ページ中 4 ページが
+      # 当たり、全ページ二度読みしたときの効果の約 6 割が得られる
+      TWO_PASS_TINT = 0.08
+      # 読みを選ぶ基準にする確信度
+      CONFIDENT_WORD = 80
+
       # --- イラスト検出用定数 ---
       # イラスト領域とみなす最小面積比
       MIN_ILLUSTRATION_AREA_RATIO = 0.02
@@ -247,7 +254,9 @@ module VivlioStarter
       # @param images_dir [String, nil] 画像の保存先ディレクトリ
       # @param image_reference_dir [String, nil] Markdown 内の画像参照パスの基底
       # @param ocr [Hash, nil] OCR 設定
-      def initialize(pdf_path, page_separator: true, text_area: nil, line_merge_tolerance: 2.0, images_dir: nil, image_reference_dir: nil, ocr: nil)
+      # @param progress [#call, nil] OCR するページごとに (ページ番号, ページ数) で呼ぶ。OCR は 1 ページ数秒かかる
+      def initialize(pdf_path, page_separator: true, text_area: nil, line_merge_tolerance: 2.0, images_dir: nil, image_reference_dir: nil, ocr: nil,
+                     progress: nil)
         @pdf_path = pdf_path
         @page_separator = page_separator != false
         @text_area = normalize_text_area(text_area)
@@ -255,6 +264,7 @@ module VivlioStarter
         @images_dir = images_dir&.to_s&.strip
         @image_reference_dir = image_reference_dir&.to_s&.strip
         @ocr = normalize_ocr(ocr)
+        @progress = progress
       end
 
       # PDF を解析し、Markdown テキスト・画像アセット・メタデータを含む Hash を返す
@@ -268,6 +278,7 @@ module VivlioStarter
         page_words = []
         page_sizes = []
 
+        @page_count = document.pages.count
         document.pages.each_with_index do |page, index|
           resolution = nil
 
@@ -331,6 +342,7 @@ module VivlioStarter
       def resolve_page_content(page, index, content)
         return ResolvedPage.new(content:, ocr_applied: false, ocr_temp_dir: nil) unless ocr_required_for_page?(page, content)
 
+        @progress&.call(index + 1, @page_count)
         resolved_content, ocr_temp_dir = extract_page_ocr_content(page, index, content.image_occurrences)
         ResolvedPage.new(content: resolved_content, ocr_applied: true, ocr_temp_dir:)
       rescue StandardError
@@ -527,6 +539,7 @@ module VivlioStarter
         temp_dir = Dir.mktmpdir("vivlio-pdf-ocr")
         source_image_path, image_width, image_height = ocr_source_image(page, index, image_occurrences, temp_dir)
         text, tsv = run_tesseract(source_image_path, File.join(temp_dir, "ocr"))
+        text, tsv = second_reading(source_image_path, temp_dir, text, tsv)
 
         OcrResult.new(
           text:,
@@ -615,6 +628,70 @@ module VivlioStarter
         end&.object
       rescue StandardError
         nil
+      end
+
+      # 囲みや絵の多いページだけ、大津の二値化をかけた画像でも読み、確信度の高い字の多いほうを選ぶ
+      # （pdf-read-ocr-postprocess-spec.md §2.2）。ページ全体にいつも二値化をかけると悪くなる
+      # （F 値 89.7% → 85.8%）が、地の色の付いた囲みのページでは大きく効く（85.9% → 97.3%）。
+      # 文字だけのページは 1 回で済ませる。選ぶ基準は確信度の平均ではなく、確信度の高い語の字数にする。
+      # 平均で選ぶと、字を落とした読み（433 字 → 325 字）を選ぶことがある
+      def second_reading(image_path, temp_dir, text, tsv)
+        return [text, tsv] unless vips_available?
+
+        image = require_vips!::Image.new_from_file(image_path).colourspace(:b_w).extract_band(0)
+        histogram = image.hist_find.to_a.flatten
+        return [text, tsv] if tint_ratio(histogram) < TWO_PASS_TINT
+
+        binarized = File.join(temp_dir, "page-otsu.png")
+        (image > otsu_threshold(histogram)).write_to_file(binarized)
+        other_text, other_tsv = run_tesseract(binarized, File.join(temp_dir, "ocr-otsu"))
+        confident_characters(other_tsv) > confident_characters(tsv) ? [other_text, other_tsv] : [text, tsv]
+      rescue StandardError
+        [text, tsv]
+      end
+
+      # 囲みの地の割合。紙の明るさ（中央値）より 10〜60 暗い面で、囲みや網掛けの背景がここに入る。
+      # スキャンした紙は真っ白ではない（中央値 226〜230）ので、紙を基準にする
+      def tint_ratio(histogram)
+        total = histogram.sum
+        return 0.0 unless total.positive?
+
+        cumulative = 0
+        median = histogram.index { (cumulative += it) * 2 >= total }.to_i
+        range = ([median - 60, 0].max..[median - 10, 0].max)
+        histogram[range].sum.fdiv(total)
+      end
+
+      # 大津の方法で、明るさの分布を 2 つに分けるしきい値を求める
+      def otsu_threshold(histogram)
+        total = histogram.sum.to_f
+        sum_all = histogram.each_with_index.sum { |count, level| count * level }
+        background = 0.0
+        sum_background = 0.0
+        histogram.each_with_index.max_by do |count, level|
+          background += count
+          sum_background += count * level
+          foreground = total - background
+          next 0.0 if background.zero? || foreground.zero?
+
+          mean_background = sum_background / background
+          mean_foreground = (sum_all - sum_background) / foreground
+          background * foreground * ((mean_background - mean_foreground)**2)
+        end.last
+      end
+
+      # 確信度が CONFIDENT_WORD 以上の語に含まれる字の数
+      def confident_characters(tsv)
+        rows = tsv.to_s.lines.map { it.chomp.split("\t", -1) }
+        header = rows.shift
+        return 0 unless header
+
+        index = header.each_with_index.to_h
+        rows.sum do |row|
+          next 0 unless row[index["level"]] == "5" && row[index["conf"]].to_f >= CONFIDENT_WORD
+
+          row[index["text"]].to_s.strip.length
+        end
       end
 
       # Tesseract を 1 回だけ起動し、プレーンテキストと TSV（座標）を同時に書き出す。
