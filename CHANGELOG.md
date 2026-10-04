@@ -15,12 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.2.0] - 2026-09-23
 
+### Added
+- **実行ファイルに `read` サブコマンドを足した** (`exe/vivlio-starter-pdf`): `vivlio-starter-pdf read PDF key=value …` で PDF を読み、`Reader#execute` の結果を JSON で標準出力へ書く。本体の `vs pdf:read` は Enhanced Mode でこの形を呼んでいたが、**実行ファイルは `--version` と `--help` しか知らず**、`Unknown option 'read'` で終わっていた。git 履歴を通して `read` は一度も無く、**Enhanced Mode は `vs` から一度も動いていなかった**（本体のテストは呼び出しをスタブしていた）。設定は本体が渡す 6 つ（`page_separator`・`text_area`・`line_merge_tolerance`・`images_dir`・`image_reference_dir`・`ocr`）を受け、知らないキーは黙って捨てずに止める。標準出力は JSON だけにし、誤りは標準エラーへ出す。実行ファイルを子プロセスで起動するテスト（`test/exe_test.rb`）を足した。
+
 ### Removed
 - **隠しノンブルの書き込み（`stamp_nombre!`）を削除した** (`enhanced_provider.rb`): 本体はすでに Prawn ＋ `qpdf --overlay` の MIT 共通実装へ移しており、**プラグインのこのメソッドはどこからも呼ばれていなかった**。139 行のうち 92 行が到達不能なまま残り、テスト 2 件がそれを検証して緑を出していた——動かない機能を確かめる緑は、あるほうが害になる。
 
   本体が `Pdf.provider` に委ねるのは `page_count` / `ensure_blank_page_pdf` / `add_outline!` の 3 つだけである。ノンブルを戻す予定は無い。プラグインの有無で成果物が変わらないほうがよい種類の処理で、CombinePDF が named destinations を再構築しない問題もそれで解消している。公開 API が 1 つ減るので SemVer なら major だが、**1.2.0 とした**。呼び出しうるのは本体 `vivlio-starter` だけで、その本体はすでに呼んでいない。本体が 1.0.0 を迎えるのに合わせて配るため、プラグインだけが 2.0.0 になる並びを避けた。
 
 ### Fixed
+- **文字を 1 字ずつ描く PDF で、各行が「全文＋先頭の 1 字を欠いた全文」に二重化していた** (`reader.rb` の `PageTextCollector#build_lines`): 行の組み立てが `buffer = +fragment.text` で始まっていた。`+` は凍結されていない文字列を複製せずに返すので、続く `<<` が先頭の断片の文字列そのものを行全体へ書き換える。`extract_page_content` は `text` と `lines` で組み立てを 2 回呼ぶため、2 回目の各行が膨らんでいた。Chrome（Vivliostyle）の PDF は字ごとに断片を描くので、`vs build` の PDF では全行がこうなる。最初のコミットからあった。Prawn で作る fixture は 1 行を 1 断片で描くため、通し経路のテストでは表に出なかった。複製して受けるようにし、複数断片の行を 2 回組み立てるテストを足した。
 - **統合テストが、どの環境でも一度も走っていなかった** (`test/reader_test.rb`): fixture が隣の repo（`../vivlio-starter/sources/*.pdf`）を指していたが、その PDF は**どこにも存在しなかった**。`File.exist?` が false を返して skip するだけなので赤くならず、**この gem の中核である `reader.rb`（1,262 行）の通し経路は未検証のまま**だった。1.1.3 で直した OCR 補正の不具合も、それを捕まえるはずのテストが止まっていた。
 
   fixture を `test/fixtures/` へ同梱し、組み立て手順を `build_fixtures.rb` に残した。読む側が HexaPDF なので、作る側は Prawn にしてある——同じ実装で作って読むと、その実装の癖が打ち消し合って検証から外れる。OCR 用には文字レイヤーを持たない PDF（`scanned.pdf`）を焼いた。テストは **34 runs / 2 skips → 37 runs / 0 skips** になった。
@@ -30,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **正規表現の重複範囲の警告が 5 件出ていた** (`reader.rb`): `々` は `p{Han}`、`ヵ` `ヶ` は `p{Katakana}` と `ァ-ヶ` に含まれる。判定は変わらない（全コードポイントで照合して確認）が、毎回 5 行の警告が出ると警告そのものを読み飛ばすようになる。
 
 ### Changed
+- **スキャンした PDF の OCR を約 4 倍速くした** (`reader.rb`): ページ全体を覆う埋め込みの画像（JPEG・PNG）があれば、`pdftoppm` でページを描き直さず、その画像を Tesseract へ渡す。描き直しは 300dpi・A4 の JPEG 1 枚で 23 秒かかり、読み取りの時間のほぼすべてだった（書き出しなら 0.05 秒）。24 ページのスキャンで 624 秒 → 151 秒、読み取りの結果は変わらない（原稿との一致の F 値 88.7% → 88.6%）。解像度はページの寸法からではなく画像の幅で見る。ページを実物より大きく作ったスキャン PDF（1542×2048pt に幅 2,057px）を設定の dpi で描き直すと、情報の増えない 3 倍の引き伸ばしになるため。幅が 1,600px に届かない画像は vips で拡大してから読む（幅 875px で確信度 88.8 → 92.2。300dpi の描き直しと同等で 0.5 秒）。回転の指定があるページ、縦横比が合わない画像、vips が無いときの小さな画像は、これまでどおり描き直す。`pdf_read.ocr.dpi` は描き直すページにだけ効く。あわせて Tesseract を 1 ページ 1 回の起動にした（これまでは TSV 用とテキスト用の 2 回）。残る時間の大半は図版の検出（vips・1 ページ約 3 秒）である。
+- **OCR の言語を書かないときの既定を、日本語だけから日本語と英語（`jpn+eng`）にした**。`english` を `eng` へ読み替えるようにもした。英語を足すと、コードを含むページで識別子が 18 語中 7 → 16 語戻り、和文の文字の適合率も 93.7% → 97.6% に上がった。英字の少ない本でも和文は悪くならない（2 冊で測定）。
 - **対応 Ruby を 3.4.10 / 4.0.7 にした**。4.0.7 は 2026-09-15 公開。
 - **依存を最新へ上げた**: HexaPDF 1.6.0 → 1.10.0、Minitest → 6.0.6、minitest-reporters 1.7.1 → 1.8.0。
 - **rubocop を入れた**（`.rubocop.yml`・`rake rubocop`・CI）。見るのは `Lint` と `Security` だけで、引用符や行数は見ない。読みやすさを削ってまで様式に従うものではなく、本体 `vivlio-starter` も同じ構えを採っている。現状 0 件。

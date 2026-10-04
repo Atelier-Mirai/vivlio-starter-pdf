@@ -45,6 +45,8 @@ brew install tesseract tesseract-lang poppler vips
 vs pdf:read document.pdf
 ```
 
+本体はこの gem を require せず、実行ファイル `vivlio-starter-pdf read PDF key=value …` を別プロセスとして呼び、標準出力の JSON を受け取ります。AGPL のコードを MIT の本体へ取り込まないための分け方です。`read` を持つのは 1.2.0 以降で、本体はそれより古いプラグインを Enhanced Mode に使いません。
+
 標準（MIT）実装に戻して動作を比べたいときは、環境変数で無効化できます。
 
 ```zsh
@@ -58,7 +60,7 @@ require "vivlio_starter/pdf"
 
 # PDF → Markdown 変換
 result = VivlioStarter::Pdf::Reader.new("input.pdf",
-  ocr: { mode: "auto", languages: ["jpn"], dpi: 300 }
+  ocr: { mode: "auto", languages: ["jpn", "eng"], dpi: 300 }
 ).execute
 
 # アウトライン付与
@@ -92,6 +94,7 @@ pdf_read:
     mode: auto
     languages:
       - japanese
+      - english
     dpi: 300
     psm: 3
     inline_image_text: include

@@ -53,6 +53,12 @@ module VivlioStarter
       MIN_PROFILE_SMOOTHING_SIGMA = 3
       MAX_PROFILE_SMOOTHING_SIGMA = 25
 
+      # --- OCR に回す画像 ---
+      # 埋め込みのスキャン画像がこの幅（px）に届かなければ、vips で拡大してから読む。
+      # A5 の本を約 230dpi、A4 を約 165dpi で取り込んだ幅にあたる。実測では幅 875px で拡大が効き
+      # （確信度 88.8 → 92.2）、幅 1,720px では効かなかった（92.2 → 91.9）
+      MIN_OCR_IMAGE_WIDTH = 1600
+
       # HexaPDF のコンテンツストリームを走査し、版面内のテキスト断片と画像出現を収集する
       class PageTextCollector < HexaPDF::Content::Processor
         attr_reader :fragments, :image_occurrences
@@ -116,7 +122,10 @@ module VivlioStarter
             end
 
             lines << Line.new(y: current_y, text: normalize_line(buffer)) unless buffer.empty?
-            buffer = +fragment.text
+            # 複製して受ける。`+fragment.text` は凍結されていない文字列をそのまま返すので、
+            # 下の `<<` が断片の文字列自体を書き換え、2 回目の呼び出し（text と lines）で
+            # 各行が「全文＋先頭の断片を欠いた全文」に膨らんでいた
+            buffer = fragment.text.dup
             current_y = fragment.y
             previous_fragment = fragment
           end
@@ -319,7 +328,7 @@ module VivlioStarter
       # OCR を実行してページコンテンツを再構築する
       # テキスト後処理（空白圧縮・括弧正規化・誤認識の補正）を適用する
       def extract_page_ocr_content(page, index, image_occurrences)
-        result = ocr_page_result(page, index)
+        result = ocr_page_result(page, index, image_occurrences)
         lines = normalize_ocr_lines(result.lines)
         text = if lines.empty?
                  postprocess_ocr_text(result.text)
@@ -499,21 +508,14 @@ module VivlioStarter
       end
 
       # 1 ページ分の OCR を実行し、OcrResult を返す
-      # pdftoppm でページ画像を生成し、Tesseract でテキスト認識する
-      def ocr_page_result(page, index)
+      # ページ画像を用意し（§ ocr_source_image）、Tesseract でテキストと座標を一度に読む
+      def ocr_page_result(page, index, image_occurrences = [])
         temp_dir = Dir.mktmpdir("vivlio-pdf-ocr")
-        prefix = File.join(temp_dir, "page")
-        stdout, status = Open3.capture2e(*ocr_render_command(prefix, index + 1))
-        raise Error, stdout.strip unless status.success?
-
-        source_image_path = Dir.glob("#{prefix}-*.png").sort.first
-        raise Error, "OCR 用のページ画像を生成できませんでした" unless source_image_path
-
-        tsv = capture_ocr_output(*ocr_tsv_command(source_image_path))
-        image_width, image_height = png_dimensions(source_image_path)
+        source_image_path, image_width, image_height = ocr_source_image(page, index, image_occurrences, temp_dir)
+        text, tsv = run_tesseract(source_image_path, File.join(temp_dir, "ocr"))
 
         OcrResult.new(
-          text: capture_ocr_output(*ocr_text_command(source_image_path)),
+          text:,
           lines: extract_ocr_lines(tsv, page),
           blocks: [],
           source_image_path:,
@@ -524,6 +526,91 @@ module VivlioStarter
       rescue StandardError
         cleanup_ocr_temp_dir(temp_dir)
         raise
+      end
+
+      # OCR にかけるページ画像を用意し、[パス, 幅, 高さ] を返す。
+      #
+      # スキャンしたページは、埋め込みの画像をそのまま書き出す。pdftoppm でページを描き直すと、
+      # 300dpi・A4 の JPEG 1 枚で 23 秒かかっていた（書き出しは 0.05 秒）。24 ページで 9.5 分の
+      # 読み取りのほぼすべてがこの描き直しだった。埋め込みの画像を使えないページは描き直す
+      def ocr_source_image(page, index, image_occurrences, temp_dir)
+        embedded = embedded_scan_image(page, image_occurrences)
+        if embedded && (embedded.info.width >= MIN_OCR_IMAGE_WIDTH || vips_available?)
+          path = File.join(temp_dir, "page.#{embedded.info.extension}")
+          embedded.write(path)
+          return [path, embedded.info.width, embedded.info.height] if embedded.info.width >= MIN_OCR_IMAGE_WIDTH
+
+          return upscale_for_ocr(path, embedded.info.width, temp_dir)
+        end
+
+        prefix = File.join(temp_dir, "page")
+        stdout, status = Open3.capture2e(*ocr_render_command(prefix, index + 1))
+        raise Error, stdout.strip unless status.success?
+
+        path = Dir.glob("#{prefix}-*.png").sort.first
+        raise Error, "OCR 用のページ画像を生成できませんでした" unless path
+
+        [path, *png_dimensions(path)]
+      end
+
+      # 画素の足りない画像を vips で拡大し、[パス, 幅, 高さ] を返す。
+      # 幅 875px（150dpi 相当）のスキャンで、2 倍にすると Tesseract の確信度が 88.8 → 92.2 に上がり、
+      # 読めなかった見出しが読めた。pdftoppm で 300dpi に描き直したとき（92.9）とほぼ同じで、0.5 秒で済む
+      def upscale_for_ocr(path, width, temp_dir)
+        scale = (MIN_OCR_IMAGE_WIDTH.to_f / width).clamp(1.0, 3.0)
+        image = require_vips!::Image.new_from_file(path).resize(scale, kernel: :lanczos3)
+        upscaled = File.join(temp_dir, "page-upscaled.png")
+        image.write_to_file(upscaled)
+        [upscaled, image.width, image.height]
+      end
+
+      # そのまま OCR に回せる埋め込みの画像を返す（無ければ nil）。
+      #
+      # OCR の座標は「画像がページ全体に、縦横比を保って広がっている」前提で
+      # ページの座標へ換算する（extract_ocr_lines・build_ocr_image_occurrence）。
+      # それを満たし、Tesseract が読める形式の画像だけを選ぶ。
+      #
+      # 解像度はページの寸法から計らない。ページを実物より大きく作ったスキャン PDF がある
+      # （1542×2048pt のページに幅 2,057px の画像。ページから計ると 96dpi だが、本の大きさでは
+      # 約 270dpi）。そういう PDF を設定の dpi で描き直すと、情報の増えない 3 倍の引き伸ばしに
+      # なり、時間だけかかる（幅 5,160px で確信度は 92.2 → 91.9）。画素の多寡は画像の幅で見る
+      # （MIN_OCR_IMAGE_WIDTH・upscale_for_ocr）。
+      #
+      # 回転の指定があるページは描き直しに任せる。画像を上下逆に置いた PDF は見分けられないが、
+      # スキャナが作る PDF では起きない
+      def embedded_scan_image(page, image_occurrences)
+        return nil unless page[:Rotate].to_i.zero?
+
+        box = media_box(page)
+        return nil unless box
+
+        page_width = box[2] - box[0]
+        page_height = box[3] - box[1]
+
+        Array(image_occurrences).find do |occurrence|
+          object = occurrence.object
+          next false unless object.is_a?(HexaPDF::Type::Image)
+
+          info = object.info
+          next false unless info.writable && %i[jpeg png].include?(info.type) && [1, 3].include?(info.components)
+          next false unless occurrence.width >= page_width * 0.98 && occurrence.height >= page_height * 0.98
+
+          # to_f を忘れない。配置を整数で書いた PDF では座標も Integer で来て、割り算が 0 になる
+          ((info.width.to_f / info.height) - (occurrence.width.to_f / occurrence.height)).abs <= 0.02
+        end&.object
+      rescue StandardError
+        nil
+      end
+
+      # Tesseract を 1 回だけ起動し、プレーンテキストと TSV（座標）を同時に書き出す。
+      # 以前は TSV 用とテキスト用に 2 回起動していた。テキストは TSV から行を組めなかったときの予備
+      # @return [Array(String, String)] [テキスト, TSV]
+      def run_tesseract(image_path, output_base)
+        command = ["tesseract", image_path, output_base, "-l", @ocr.languages.join("+"), "--psm", @ocr.psm.to_s, "txt", "tsv"]
+        stdout, stderr, status = Open3.capture3(*command)
+        raise Error, [stderr, stdout].find { !it.to_s.strip.empty? }.to_s.strip unless status.success?
+
+        %w[txt tsv].map { File.read("#{output_base}.#{it}", encoding: "UTF-8") }
       end
 
       # pdftoppm によるページ画像レンダリングコマンドを組み立てる
@@ -537,30 +624,6 @@ module VivlioStarter
           pdf_path,
           prefix
         ]
-      end
-
-      # Tesseract によるプレーンテキスト出力コマンドを組み立てる
-      def ocr_text_command(image_path)
-        [
-          "tesseract",
-          image_path,
-          "stdout",
-          "-l", @ocr.languages.join("+"),
-          "--psm", @ocr.psm.to_s
-        ]
-      end
-
-      # Tesseract による TSV 出力コマンドを組み立てる（座標情報取得用）
-      def ocr_tsv_command(image_path)
-        ocr_text_command(image_path) + ["tsv"]
-      end
-
-      # 外部コマンドを実行し、stdout を返す。失敗時は Error を送出する
-      def capture_ocr_output(*command)
-        stdout, stderr, status = Open3.capture3(*command)
-        raise Error, [stderr, stdout].find { !it.to_s.strip.empty? }.to_s.strip unless status.success?
-
-        stdout
       end
 
       # Tesseract TSV 出力を解析し、行単位の Line 配列を構築する
@@ -829,6 +892,14 @@ module VivlioStarter
             height: region.height.round
           )
         )
+      end
+
+      # ruby-vips と libvips が使えるか。使えなければ、画素の足りない画像は拡大せずに描き直しへ回す
+      def vips_available?
+        require_vips!
+        true
+      rescue Error
+        false
       end
 
       # ruby-vips を安全にロードし、Vips モジュールを返す
@@ -1195,7 +1266,9 @@ module VivlioStarter
               else value.to_s.split(/[+,]/)
               end
         languages = raw.map { normalize_ocr_language_alias(it) }.reject(&:empty?)
-        languages = %w[jpn] if languages.empty?
+        # 既定は日本語と英語。技術書はコードや英字の語を含み、英語を足すと識別子が
+        # 18 語中 7 → 16 語戻った。和文は悪くならない（pdf-read-ocr-postprocess-spec.md §2.1）
+        languages = %w[jpn eng] if languages.empty?
         languages.uniq
       end
 
@@ -1205,6 +1278,7 @@ module VivlioStarter
         in "" then ""
         in "japanese" then "jpn"
         in "japanese_vertical" then "jpn_vert"
+        in "english" then "eng"
         else value.to_s.strip
         end
       end

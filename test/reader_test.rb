@@ -103,6 +103,15 @@ end
     assert_equal(:captionize, normalized.inline_image_text)
   end
 
+  # english は eng に読み替える。言語を書かなければ日本語と英語で読む
+  def test_should_read_english_alias_and_default_to_japanese_and_english
+    english = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF, ocr: { languages: %w[japanese english] })
+    default = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF, ocr: {})
+
+    assert_equal(%w[jpn eng], english.instance_variable_get(:@ocr).languages)
+    assert_equal(%w[jpn eng], default.instance_variable_get(:@ocr).languages)
+  end
+
   # apply_inline_image_text_policy が exclude モードで画像内の行を除外することを検証する
   def test_apply_inline_image_text_policy_excludes_lines_inside_images
     reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF, ocr: { inline_image_text: "exclude" })
@@ -337,6 +346,52 @@ end
     end
   end
 
+  # スキャンのページは、ページを描き直さずに埋め込みの画像を読む。
+  # 描き直し（pdftoppm）は 300dpi・A4 の JPEG で 1 ページ 23 秒かかり、読み取りの時間のほぼすべてだった。
+  # scanned.pdf の画像は幅 875px と画素が足りないので、vips で 1,600px まで拡大してから読む
+  def test_should_read_embedded_scan_image_without_rendering_page
+    skip "OCR dependencies are not available" unless ocr_dependencies_available?
+    skip "Vips is not available" unless vips_available?
+
+    reader = VivlioStarter::Pdf::Reader.new(OCR_SAMPLE_PDF, ocr: { mode: "always", languages: ["jpn"], psm: 3 })
+    document = HexaPDF::Document.open(OCR_SAMPLE_PDF)
+    page = document.pages.first
+    occurrences = reader.send(:extract_page_content, page, 0).image_occurrences
+
+    result = reader.stub(:ocr_render_command, ->(*) { flunk "ページを描き直した（pdftoppm を呼んだ）" }) do
+      reader.send(:ocr_page_result, page, 0, occurrences)
+    end
+
+    assert_equal(VivlioStarter::Pdf::Reader::MIN_OCR_IMAGE_WIDTH, result.image_width)
+    assert_includes(result.text.gsub(/[[:space:]]+/, ""), "プログラミング技術習得の三要素")
+  ensure
+    reader&.send(:cleanup_ocr_temp_dir, result&.temp_dir)
+  end
+
+  # 画像の配置を整数で書いた PDF でも、スキャンのページと見分ける。
+  # 座標が Integer で来ると縦横比の割り算が 0 になり、実物のスキャン PDF（1290×1916pt に
+  # 1720×2555px）が描き直しへ落ちていた。Prawn で作る fixture は小数で置くので表に出なかった
+  def test_should_detect_scanned_page_when_image_is_placed_with_integer_coordinates
+    reader = VivlioStarter::Pdf::Reader.new(OCR_SAMPLE_PDF)
+    page = HexaPDF::Document.open(OCR_SAMPLE_PDF).pages.first
+    image = reader.send(:extract_page_content, page, 0).image_occurrences.first.object
+    occurrence = VivlioStarter::Pdf::Reader::ImageOccurrence.new(
+      x: 210, top: 595, bottom: 0, center_y: 297, left: 0, right: 420, width: 420, height: 595, object: image
+    )
+
+    assert_same(image, reader.send(:embedded_scan_image, page, [occurrence]))
+  end
+
+  # ページの一部に置いた図版は、スキャンのページとして扱わない（描き直して読む）
+  def test_should_not_treat_inline_figure_as_scanned_page
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
+    page = HexaPDF::Document.open(SAMPLE_PDF).pages.first
+    occurrences = reader.send(:extract_page_content, page, 0).image_occurrences
+
+    refute_empty(occurrences)
+    assert_nil(reader.send(:embedded_scan_image, page, occurrences))
+  end
+
   # OCR の誤認識補正が config/ocr_corrections.yml から読まれ、OCR テキストに当たることを検証する。
   # 以前はプロジェクトの prh 校正辞書（textlint_prh.yml）を見ており、改名後は表が空のまま
   # 気づかれずに素通りしていた。あわせて、当てすぎないこと（言語芸術・Al）も確かめる
@@ -379,6 +434,29 @@ end
         assert_equal("入工知能の研究", reader.send(:postprocess_ocr_text, "入工知能の研究"))
       end
     end
+  end
+
+  # 行の組み立ては何度呼んでも同じ結果を返す。extract_page_content が text と lines で
+  # 2 回呼ぶため、1 回目が断片の文字列を書き換えると、2 回目の各行が
+  # 「全文＋先頭の断片を欠いた全文」に膨らむ（vs build の PDF で全行がこうなっていた）。
+  # Prawn で作る fixture は 1 行を 1 断片で描くので、通し経路のテストでは表に出なかった
+  def test_should_build_same_lines_on_every_call_when_line_has_several_fragments
+    collector = VivlioStarter::Pdf::Reader::PageTextCollector.new(nil, bounds: nil, line_merge_tolerance: 2.0)
+    fragment = VivlioStarter::Pdf::Reader::Fragment
+    collector.fragments.push(
+      fragment.new(x: 72.0, right: 82.0, y: 700.0, text: +"挑"),
+      fragment.new(x: 82.0, right: 92.0, y: 700.0, text: +"戦"),
+      fragment.new(x: 92.0, right: 102.0, y: 700.0, text: +"状"),
+      fragment.new(x: 72.0, right: 82.0, y: 680.0, text: +"次"),
+      fragment.new(x: 82.0, right: 92.0, y: 680.0, text: +"行")
+    )
+
+    first = collector.lines.map(&:text)
+    second = collector.lines.map(&:text)
+
+    assert_equal(%w[挑戦状 次行], first)
+    assert_equal(first, second)
+    assert_equal("挑戦状\n次行", collector.text)
   end
 
   private

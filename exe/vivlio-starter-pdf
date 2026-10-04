@@ -1,47 +1,101 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require 'json'
 require 'vivlio_starter/pdf'
 
 # vivlio-starter-pdf CLI
-# Provides basic version information for debugging and user confirmation
-
+#
+# 本体 vivlio-starter（MIT）は AGPL のこの gem を require せず、別プロセスとして呼ぶ。
+# `read` はその窓口で、`vs pdf:read` の Enhanced Mode が使う。人が直接打つ想定ではない。
 module VivlioStarter
   module Pdf
     class CLI
+      # `read` が受け付ける設定。値は `key=value` で渡し、Hash は JSON で書く。
+      # 本体の PdfReadCommand#enhanced_command が組み立てる引数と対になっている
+      READ_OPTION_PARSERS = {
+        'page_separator' => ->(value) { value == 'true' },
+        'text_area' => ->(value) { JSON.parse(value) },
+        'line_merge_tolerance' => ->(value) { Float(value) },
+        'images_dir' => ->(value) { value },
+        'image_reference_dir' => ->(value) { value },
+        'ocr' => ->(value) { JSON.parse(value) }
+      }.freeze
+
       def self.run(args = [])
-        case args[0]
-        when '--version', '-v'
+        case args
+        in ['--version' | '-v', *]
           puts "vivlio-starter-pdf #{VERSION}"
-        when '--help', '-h', nil
-          puts <<~HELP
-            vivlio-starter-pdf #{VERSION} - Advanced PDF processor for vivlio-starter
-
-            Usage:
-              vivlio-starter-pdf [options]
-
-            Options:
-              --version, -v  Print version and exit
-              --help, -h     Print this help and exit
-
-            Description:
-              vivlio-starter-pdf is an AGPL-licensed plugin for vivlio-starter
-              that provides advanced PDF processing capabilities including:
-              - PDF to Markdown conversion using HexaPDF
-              - Japanese OCR support with Tesseract
-              - Image extraction and precise positioning
-              - PDF outline generation and hidden pagination
-
-            This is a plugin and should be used through vivlio-starter:
-              vs pdf:read document.pdf
-
-            For more information, visit: https://github.com/Atelier-Mirai/vivlio-starter-pdf
-          HELP
+        in ['--help' | '-h', *] | []
+          puts help_text
+        in ['read', pdf_path, *settings]
+          read(pdf_path, settings)
+        in ['read']
+          fail_with('read には PDF のパスを指定してください')
         else
-          puts "Error: Unknown option '#{args[0]}'"
-          puts "Use 'vivlio-starter-pdf --help' for usage information."
-          exit 1
+          fail_with("Unknown option '#{args[0]}'\nUse 'vivlio-starter-pdf --help' for usage information.")
         end
+      end
+
+      # PDF を読み、Reader#execute の結果を JSON で標準出力へ書く。
+      # 標準出力は JSON だけにする。呼び出し側は標準出力をそのまま JSON.parse するので、
+      # 警告や進捗は標準エラーへ出すこと
+      def self.read(pdf_path, settings)
+        fail_with("PDF が見つかりません: #{pdf_path}") unless File.file?(pdf_path)
+
+        options = parse_read_options(settings)
+        result = Reader.new(pdf_path, **options).execute
+        $stdout.write(JSON.generate(result))
+      rescue JSON::ParserError, ArgumentError => e
+        fail_with("read の設定を解釈できません: #{e.message}")
+      end
+
+      # `key=value` の並びを Reader.new のキーワード引数へ変える。知らないキーは誤りとして止める
+      # （本体と版がずれて設定が黙って捨てられるのを防ぐ）
+      def self.parse_read_options(settings)
+        settings.to_h do |setting|
+          key, value = setting.split('=', 2)
+          parser = READ_OPTION_PARSERS[key]
+          raise ArgumentError, "知らない設定です: #{key}" if parser.nil? || value.nil?
+
+          [key.to_sym, parser.(value)]
+        end
+      end
+
+      def self.fail_with(message)
+        warn "Error: #{message}"
+        exit 1
+      end
+
+      def self.help_text
+        <<~HELP
+          vivlio-starter-pdf #{VERSION} - Advanced PDF processor for vivlio-starter
+
+          Usage:
+            vivlio-starter-pdf [options]
+            vivlio-starter-pdf read PDF [key=value ...]
+
+          Options:
+            --version, -v  Print version and exit
+            --help, -h     Print this help and exit
+
+          Commands:
+            read  Read PDF and print the result as JSON (used by `vs pdf:read`)
+                  keys: #{READ_OPTION_PARSERS.keys.join(', ')}
+
+          Description:
+            vivlio-starter-pdf is an AGPL-licensed plugin for vivlio-starter
+            that provides advanced PDF processing capabilities including:
+            - PDF to Markdown conversion using HexaPDF
+            - Japanese OCR support with Tesseract
+            - Image extraction and precise positioning
+            - PDF outline generation
+
+          This is a plugin and should be used through vivlio-starter:
+            vs pdf:read document.pdf
+
+          For more information, visit: https://github.com/Atelier-Mirai/vivlio-starter-pdf
+        HELP
       end
     end
   end
