@@ -459,6 +459,30 @@ end
     assert_equal("挑戦状\n次行", collector.text)
   end
 
+  # OCR の語を PDF の座標（pt）で返す。本体はこれを字に割り、見出しや段落を推定する。
+  # ベースラインと大きさは行（level 4）の枠から取り、同じ行の語の高さをそろえる
+  def test_should_convert_ocr_words_to_page_coordinates
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
+    page = { MediaBox: [0, 0, 600, 800] }
+    tsv = [
+      %w[level page_num block_num par_num line_num word_num left top width height conf text],
+      %w[1 1 0 0 0 0 0 0 1200 1600 -1],
+      %w[4 1 1 1 1 0 100 200 400 40 -1],
+      %w[5 1 1 1 1 1 100 210 120 30 95.5 光の],
+      %w[5 1 1 1 1 2 230 200 60 40 88.0 波],
+      %w[5 1 1 1 1 3 300 205 10 10 -1]
+    ].map { it.join("\t") }.join("\n")
+
+    words = reader.send(:extract_ocr_words, tsv, page)
+
+    assert_equal(%w[光の 波], words.map(&:text))
+    assert_equal([50.0, 115.0], words.map(&:x))
+    assert_equal([680.0, 680.0], words.map(&:y))
+    assert_equal([60.0, 30.0], words.map(&:width))
+    assert_equal([20.0, 20.0], words.map(&:size))
+    assert_equal({ text: "光の", x: 50.0, y: 680.0, width: 60.0, size: 20.0, conf: 95.5 }, words.first.to_h)
+  end
+
   private
 
   # ImageMagick（magick または convert）が PATH 上で利用可能かを確認する

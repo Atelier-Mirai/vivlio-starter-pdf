@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.2.0] - 2026-09-23
 
 ### Added
+- **`read` の結果に、OCR で読んだ語の位置（`page_words`）とページの大きさ（`page_sizes`）を足した** (`reader.rb`): `page_words` はページごとの配列で、OCR したページなら語の一覧（`text`・`x`・`y`・`width`・`size`・`conf`。座標は PDF のページの pt で、`y` はベースライン、`size` は行の高さ）、しなかったページなら `null`。本体の `vs pdf:read` はこれを字に割り、文字の層のある PDF と同じ紙面の推定（`pdf-read-structure-spec.md` の経路 B）で見出し・段落・コードを戻す。ベースラインと大きさは語ではなく Tesseract の行（level 4）の枠から取る（語の枠は句読点や小書きの字で上下し、同じ行の語がそろわない）。これまでの `page_texts`・`page_chunks` は残すので、語を読まない本体でも動く。
 - **実行ファイルに `read` サブコマンドを足した** (`exe/vivlio-starter-pdf`): `vivlio-starter-pdf read PDF key=value …` で PDF を読み、`Reader#execute` の結果を JSON で標準出力へ書く。本体の `vs pdf:read` は Enhanced Mode でこの形を呼んでいたが、**実行ファイルは `--version` と `--help` しか知らず**、`Unknown option 'read'` で終わっていた。git 履歴を通して `read` は一度も無く、**Enhanced Mode は `vs` から一度も動いていなかった**（本体のテストは呼び出しをスタブしていた）。設定は本体が渡す 6 つ（`page_separator`・`text_area`・`line_merge_tolerance`・`images_dir`・`image_reference_dir`・`ocr`）を受け、知らないキーは黙って捨てずに止める。標準出力は JSON だけにし、誤りは標準エラーへ出す。実行ファイルを子プロセスで起動するテスト（`test/exe_test.rb`）を足した。
 
 ### Removed

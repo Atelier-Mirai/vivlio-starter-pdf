@@ -21,8 +21,13 @@ module VivlioStarter
       Line = Data.define(:y, :text)
       # PDF 内画像の出現位置（座標・サイズ・XObject 参照）
       ImageOccurrence = Data.define(:x, :top, :bottom, :center_y, :left, :right, :width, :height, :object)
-      # ページのテキスト・行・画像出現をまとめたコンテンツ
-      PageContent = Data.define(:text, :lines, :image_occurrences)
+      # ページのテキスト・行・画像出現をまとめたコンテンツ。words は OCR で読んだ語（OCR したページだけ）
+      PageContent = Data.define(:text, :lines, :image_occurrences, :words) do
+        def initialize(text:, lines:, image_occurrences:, words: []) = super
+      end
+      # OCR で読んだ 1 語。座標は PDF のページ（左下が原点・pt）。y はベースライン、size は行の高さ。
+      # 本体（vivlio-starter）は語を 1 字ずつに割り、紙面の推定（経路 B）で見出しや段落を戻す
+      OcrWord = Data.define(:text, :x, :y, :width, :size, :conf)
       # 抽出済み画像アセット（ページ番号・ファイル名・座標情報を保持）
       ImageAsset = Data.define(:page, :index, :filename, :output_path, :reference_path, :x, :top, :bottom, :center_y, :left, :right, :width, :height)
       # OCR で検出したイラスト領域（ピクセル座標）
@@ -34,7 +39,9 @@ module VivlioStarter
       # ページ解析の最終結果（コンテンツ + OCR 適用有無 + 一時ディレクトリ）
       ResolvedPage = Data.define(:content, :ocr_applied, :ocr_temp_dir)
       # OCR 実行結果（テキスト・行・ブロック・画像情報を保持）
-      OcrResult = Data.define(:text, :lines, :blocks, :source_image_path, :image_width, :image_height, :temp_dir)
+      OcrResult = Data.define(:text, :lines, :blocks, :source_image_path, :image_width, :image_height, :temp_dir, :words) do
+        def initialize(text:, lines:, blocks:, source_image_path:, image_width:, image_height:, temp_dir:, words: []) = super
+      end
 
       # --- イラスト検出用定数 ---
       # イラスト領域とみなす最小面積比
@@ -251,12 +258,15 @@ module VivlioStarter
       end
 
       # PDF を解析し、Markdown テキスト・画像アセット・メタデータを含む Hash を返す
-      # @return [Hash] :markdown, :page_texts, :page_chunks, :pages, :images
+      # @return [Hash] :markdown, :page_texts, :page_chunks, :pages, :images, :page_words, :page_sizes
+      #   page_words は、OCR したページなら語の一覧（OcrWord#to_h）、しなかったページなら nil
       def execute
         document = HexaPDF::Document.open(pdf_path)
         page_texts = []
         page_chunks = []
         images = []
+        page_words = []
+        page_sizes = []
 
         document.pages.each_with_index do |page, index|
           resolution = nil
@@ -271,6 +281,8 @@ module VivlioStarter
             page_texts << page_text
             page_chunks << build_page_chunk(page_lines, page_images, page_text, image_captions:)
             images.concat(page_images)
+            page_words << (resolution.ocr_applied ? resolution.content.words.map(&:to_h) : nil)
+            page_sizes << page_size(page)
           ensure
             cleanup_ocr_temp_dir(resolution&.ocr_temp_dir)
           end
@@ -281,7 +293,9 @@ module VivlioStarter
           page_texts:,
           page_chunks:,
           pages: document.pages.count,
-          images: images.map(&:to_h)
+          images: images.map(&:to_h),
+          page_words:,
+          page_sizes:
         }
       end
 
@@ -338,9 +352,9 @@ module VivlioStarter
 
         resolved_image_occurrences = ocr_image_occurrences(page, image_occurrences, result)
         page_content = if text.empty?
-                         PageContent.new(text: "", lines: [], image_occurrences: resolved_image_occurrences)
+                         PageContent.new(text: "", lines: [], image_occurrences: resolved_image_occurrences, words: result.words)
                        else
-                         PageContent.new(text:, lines:, image_occurrences: resolved_image_occurrences)
+                         PageContent.new(text:, lines:, image_occurrences: resolved_image_occurrences, words: result.words)
                        end
 
         [page_content, result.temp_dir]
@@ -521,7 +535,8 @@ module VivlioStarter
           source_image_path:,
           image_width:,
           image_height:,
-          temp_dir:
+          temp_dir:,
+          words: extract_ocr_words(tsv, page)
         )
       rescue StandardError
         cleanup_ocr_temp_dir(temp_dir)
@@ -677,6 +692,51 @@ module VivlioStarter
         end.sort_by { [-it.y.to_f, it.text] }
       rescue KeyError
         []
+      end
+
+      # Tesseract TSV の語（level 5）を、PDF のページ座標の OcrWord にする。
+      # ベースラインと大きさは、語ではなく行（level 4）の枠から取る。語ごとの枠は字の形
+      # （句読点・小書き）で上下するので、同じ行の語がそろわなくなる
+      def extract_ocr_words(tsv, page)
+        rows = tsv.to_s.lines.map { it.chomp.split("\t", -1) }
+        header = rows.shift
+        box = media_box(page)
+        return [] unless header && box
+
+        index = header.each_with_index.to_h
+        value = ->(row, name) { row[index.fetch(name)] }
+        image = rows.find { value.(it, "level") == "1" }
+        return [] unless image
+
+        scale_x = (box[2] - box[0]) / value.(image, "width").to_f
+        scale_y = (box[3] - box[1]) / value.(image, "height").to_f
+        line_key = ->(row) { %w[page_num block_num par_num line_num].map { value.(row, it) } }
+        lines = rows.select { value.(it, "level") == "4" }.to_h { [line_key.(it), it] }
+
+        rows.filter_map do |row|
+          text = value.(row, "text").to_s.strip
+          line = lines[line_key.(row)]
+          next if value.(row, "level") != "5" || text.empty? || line.nil?
+
+          line_top = value.(line, "top").to_f
+          line_height = value.(line, "height").to_f
+          OcrWord.new(
+            text:,
+            x: box[0] + (value.(row, "left").to_f * scale_x),
+            y: box[3] - ((line_top + line_height) * scale_y),
+            width: value.(row, "width").to_f * scale_x,
+            size: line_height * scale_y,
+            conf: value.(row, "conf").to_f
+          )
+        end
+      rescue KeyError, ZeroDivisionError
+        []
+      end
+
+      # ページの幅と高さ（pt）
+      def page_size(page)
+        box = media_box(page)
+        box ? [box[2] - box[0], box[3] - box[1]] : nil
       end
 
       # PNG ファイルの幅と高さをヘッダから読み取る
