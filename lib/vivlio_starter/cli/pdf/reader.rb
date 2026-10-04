@@ -72,6 +72,9 @@ module VivlioStarter
       # A5 の本を約 230dpi、A4 を約 165dpi で取り込んだ幅にあたる。実測では幅 875px で拡大が効き
       # （確信度 88.8 → 92.2）、幅 1,720px では効かなかった（92.2 → 91.9）
       MIN_OCR_IMAGE_WIDTH = 1600
+      # これを超える解像度のスキャンは、TARGET_OCR_DPI へ縮めてから読む
+      MAX_OCR_DPI = 400
+      TARGET_OCR_DPI = 300.0
 
       # HexaPDF のコンテンツストリームを走査し、版面内のテキスト断片と画像出現を収集する
       class PageTextCollector < HexaPDF::Content::Processor
@@ -566,6 +569,8 @@ module VivlioStarter
         if embedded && (embedded.info.width >= MIN_OCR_IMAGE_WIDTH || vips_available?)
           path = File.join(temp_dir, "page.#{embedded.info.extension}")
           embedded.write(path)
+          dpi = scan_dpi(page, embedded.info.width)
+          return downscale_for_ocr(path, dpi, temp_dir) if dpi && dpi > MAX_OCR_DPI && vips_available?
           return [path, embedded.info.width, embedded.info.height] if embedded.info.width >= MIN_OCR_IMAGE_WIDTH
 
           return upscale_for_ocr(path, embedded.info.width, temp_dir)
@@ -579,6 +584,25 @@ module VivlioStarter
         raise Error, "OCR 用のページ画像を生成できませんでした" unless path
 
         [path, *png_dimensions(path)]
+      end
+
+      # ページの大きさから見たスキャンの解像度（dpi）。ページを実物より大きく作った PDF では低く出るが、
+      # 縮める判定（MAX_OCR_DPI を超えるか）にしか使わないので、そういう PDF は縮めない側に倒れる
+      def scan_dpi(page, image_width)
+        box = media_box(page)
+        return nil unless box && (box[2] - box[0]).positive?
+
+        image_width / ((box[2] - box[0]) / 72.0)
+      end
+
+      # 解像度の高すぎるスキャンを 300dpi へ縮める。Tesseract は字が大きすぎても読み違える。
+      # 97 章を 600dpi で読むと F 値 89.3%・5 分 14 秒、300dpi に縮めると 90.3%・3 分 1 秒だった
+      def downscale_for_ocr(path, dpi, temp_dir)
+        image = require_vips!::Image.new_from_file(path).resize(TARGET_OCR_DPI / dpi, kernel: :lanczos3)
+        downscaled = File.join(temp_dir, "page-downscaled.jpg")
+        # PNG で書くと、書き出しと読み込みで 1 ページ 1 秒ほど余計にかかる
+        image.write_to_file(downscaled, Q: 92)
+        [downscaled, image.width, image.height]
       end
 
       # 画素の足りない画像を vips で拡大し、[パス, 幅, 高さ] を返す。

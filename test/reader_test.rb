@@ -536,6 +536,27 @@ end
     assert_equal([[5, 24]], calls)
   end
 
+  # スキャンの解像度はページの幅から見積もり、400dpi を超えれば 300dpi へ縮めて読む。
+  # 600dpi のまま読むと、字が大きすぎて読み違える（97 章で F 値 89.3% → 縮めて 90.6%）
+  def test_should_downscale_scan_above_400dpi
+    skip "Vips is not available" unless vips_available?
+
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
+    a4 = { MediaBox: [0, 0, 595.0, 842.0] }
+
+    assert_in_delta(600.0, reader.send(:scan_dpi, a4, 4958), 0.5)
+    assert_in_delta(96.0, reader.send(:scan_dpi, { MediaBox: [0, 0, 1290, 1916] }, 1720), 0.5)
+
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "page.png")
+      reader.send(:require_vips!)::Image.black(1200, 1600).write_to_file(path)
+      downscaled, width, height = reader.send(:downscale_for_ocr, path, 600.0, dir)
+
+      assert_equal([600, 800], [width, height])
+      assert(File.exist?(downscaled))
+    end
+  end
+
   # 文字だけのページ（囲みの地が少ない）は二度読みしない
   def test_should_read_once_when_page_has_little_tint
     skip "Vips is not available" unless vips_available?
