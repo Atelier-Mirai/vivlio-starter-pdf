@@ -84,24 +84,23 @@ module VivlioStarter
       # TSV で 1 行を表す列（ブロック・段落・行の番号）
       LINE_KEY = %w[page_num block_num par_num line_num].freeze
       # 英字の語（ASCII とラテン文字、英文の引用符とダッシュ）
-      LATIN_WORD = /\A[\p{ASCII}\p{Latin}‘’“”–—]+\z/
+      LATIN_WORD = /\A(?:\p{ASCII}|\p{Latin}|[‘’“”–—])+\z/
 
-      # --- イラスト検出用定数 ---
-      # イラスト領域とみなす最小面積比
-      MIN_ILLUSTRATION_AREA_RATIO = 0.02
-      # テキスト領域と区別するアスペクト比上限
-      ILLUSTRATION_TEXT_ASPECT_MAX = 6.0
-      # 前景検出の輝度閾値（この値未満のピクセルを前景とする）
-      FOREGROUND_THRESHOLD = 210
-      # 行プロファイル閾値の標準偏差スケール係数
-      ROW_ACTIVITY_STDDEV_SCALE = 0.5
-      # 列単位の前景活性度閾値
-      COLUMN_ACTIVITY_THRESHOLD = 0.05
-      # ガウシアン平滑化のシグマ比率（画像高さに対する割合）
-      PROFILE_SMOOTHING_SIGMA_RATIO = 0.012
-      # シグマの下限・上限
-      MIN_PROFILE_SMOOTHING_SIGMA = 3
-      MAX_PROFILE_SMOOTHING_SIGMA = 25
+      # --- 図版の検出（pdf-read-ocr-improvement-notes.md §4.2・§4.4） ---
+      # ページを縮めて調べるときの幅（px）。A4 で約 37dpi、1 画素が約 2pt になる
+      FIGURE_WORK_WIDTH = 310
+      # 紙の明るさよりこれだけ暗い画素と、彩度（LCh の C）がこれを超える画素を、図の候補にする。
+      # 彩度は 10〜30 のどこでも 97 章の成績は同じで、淡い黄色の本の表紙が入るよう低めにした
+      FIGURE_DARKNESS = 50
+      FIGURE_CHROMA = 15
+      # 確信度がこれ以上の語と、語の確信度の平均がこれ以上の行は、文字として図の候補から消す
+      FIGURE_TEXT_CONFIDENCE = 60
+      # 図とみなす大きさの下限。辺はページの幅に、面積はページの面積に対する割合（A4 で 40pt・6,000pt²）。
+      # 見出しの帯の色の札（A-2）や、MEMO の札、会話文の話者のアイコン（32pt 角）は外れる
+      FIGURE_MIN_SIDE = 40 / 595.0
+      FIGURE_MIN_AREA = 6000 / (595.0 * 842.0)
+      # 図の枠を削るときに残す、図の画素の埋まった列・行の割合
+      FIGURE_DENSE = 0.3
 
       # --- OCR に回す画像 ---
       # 埋め込みのスキャン画像がこの幅（px）に届かなければ、vips で拡大してから読む。
@@ -990,173 +989,119 @@ module VivlioStarter
         inline_occurrences = Array(image_occurrences).reject { scanned_page_image_occurrence?(page, it) }
         return inline_occurrences unless scanned_page_image?(page, image_occurrences) || inline_occurrences.empty?
 
-        inline_occurrences + extract_illustration_regions_vips(result.source_image_path).map { build_ocr_image_occurrence(page, it, result) }
+        inline_occurrences + extract_illustration_regions_vips(result.source_image_path, result.words, page).map { build_ocr_image_occurrence(page, it, result) }
       rescue StandardError
         inline_occurrences
       end
 
-      # vips を使って OCR ページ画像からイラスト領域を自動検出する
-      # 前景マスク → 行プロファイル → ガウシアン平滑化 → 領域分割 の流れで処理する
-      def extract_illustration_regions_vips(source_image_path)
-        vips = require_vips!
-        image = vips::Image.new_from_file(source_image_path)
-        mask = vips_foreground_mask(image)
-        row_profile = smooth_profile(build_row_profile(mask), sigma: profile_smoothing_sigma(image.height))
-        stats = profile_statistics(row_profile)
-        threshold = stats.fetch(:average) + (stats.fetch(:stddev) * ROW_ACTIVITY_STDDEV_SCALE)
-
-        regions = find_regions_from_profile(
-          row_profile,
-          image.height,
-          threshold:,
-          max_gap: [20, (image.height * 0.006).round].max,
-          min_height: [100, (image.height * 0.03).round].max
-        )
-
-        regions.filter_map { build_foreground_region(mask, it, image.width, image.height) }
-      end
-
-      # 画像をグレースケール化し、前景ピクセルの二値マスクを生成する
-      def vips_foreground_mask(image)
-        gray = image.colourspace("b-w")
-        gray
-          .relational_const(:less, [FOREGROUND_THRESHOLD])
-          .cast(:uchar)
-          .linear([255.0], [0])
-          .cast(:uchar)
-      end
-
-      # 各行の前景ピクセル密度（0.0〜1.0）を算出して行プロファイルを構築する
-      def build_row_profile(mask)
-        (0...mask.height).map do |y|
-          row = mask.crop(0, y, mask.width, 1)
-          row.avg / 255.0
+      # OCR したページの画像から図の範囲を見つける（pdf-read-ocr-improvement-notes.md §4.2・§4.4）。
+      # ページを縮め、紙より濃い画素と色の付いた画素を拾い、OCR で読めた文字（確信度の高い語と行）を
+      # 消してから、残ったまとまりを図とみなす。97 章のスキャンでは、図 15 枚のうち 14 枚が見つかり、
+      # 誤りは無かった（行ごとの濃さで探していた以前の方法は 1 枚で、1 ページ約 3 秒かかっていた）。
+      # 白地の線だけの図は、文字を消すと線しか残らず、見つからない
+      # @param words [Array<OcrWord>] このページの OCR の語（PDF のページの座標）
+      # @return [Array<IllustrationRegion>] 元の画像の画素での範囲
+      def extract_illustration_regions_vips(source_image_path, words, page)
+        image = require_vips!::Image.new_from_file(source_image_path)
+        factor = [(image.width / FIGURE_WORK_WIDTH.to_f).round, 1].max
+        small = image.shrink(factor, factor)
+        ink = figure_ink(small)
+        erase_text(ink, small.width, small.height, words, page)
+        figure_boxes(ink, small.width, small.height).map do |left, top, right, bottom|
+          IllustrationRegion.new(left: left * factor, top: top * factor, width: (right - left) * factor, height: (bottom - top) * factor)
         end
       end
 
-      # 行プロファイルにガウシアン平滑化を適用してノイズを抑制する
-      def smooth_profile(values, sigma:)
-        sigma = [[sigma.to_f, MIN_PROFILE_SMOOTHING_SIGMA].max, MAX_PROFILE_SMOOTHING_SIGMA].min
-        radius = [((sigma * 2).ceil), 1].max
-        denom = 2.0 * sigma**2
+      # 図の候補の画素（左上から行ごとに並べた真偽）。紙の明るさ（中央値）より FIGURE_DARKNESS 以上
+      # 暗いか、彩度が FIGURE_CHROMA を超える画素。地の色の付いた囲み（紙より 10〜40 暗い）は入らない
+      def figure_ink(small)
+        small = small.extract_band(0, n: 3) if small.bands > 3
+        gray = small.colourspace(:b_w).extract_band(0)
+        histogram = gray.hist_find.to_a.flatten
+        total = histogram.sum
+        cumulative = 0
+        paper = histogram.index { (cumulative += it) * 2 >= total }
+        mask = gray < (paper - FIGURE_DARKNESS)
+        mask |= small.colourspace(:lch).extract_band(1) > FIGURE_CHROMA if small.bands >= 3
+        mask.cast(:uchar).write_to_memory.unpack("C*").map(&:positive?)
+      end
 
-        values.map.with_index do |_, index|
-          total = 0.0
-          weights = 0.0
+      # 確信度の高い語と、語の確信度の平均が高い行の範囲を、図の候補から消す。行ごと消すのは、語の
+      # あいだの隙間に残る字の切れ端で、本文の行が図の候補につながらないようにするため
+      def erase_text(ink, width, height, words, page)
+        box = media_box(page)
+        scale_x = width / (box[2] - box[0])
+        scale_y = height / (box[3] - box[1])
+        lines = words.group_by { [it.y, it.size] }.values.select { |line| line.sum(&:conf) / line.size >= FIGURE_TEXT_CONFIDENCE }
+        spans = lines.map { |line| [line.map(&:x).min, line.first.y, line.map { it.x + it.width }.max, line.first.y + line.first.size] } +
+                words.select { it.conf >= FIGURE_TEXT_CONFIDENCE }.map { [it.x, it.y, it.x + it.width, it.y + it.size] }
+        spans.each do |left, bottom, right, top|
+          columns = ((left - box[0]) * scale_x).floor.clamp(0, width)...((right - box[0]) * scale_x).ceil.clamp(0, width)
+          rows = ((box[3] - top) * scale_y).floor.clamp(0, height)...((box[3] - bottom) * scale_y).ceil.clamp(0, height)
+          rows.each { |y| columns.each { |x| ink[(y * width) + x] = false } }
+        end
+      end
 
-          (-radius..radius).each do |offset|
-            position = index + offset
-            next if position.negative? || position >= values.length
+      # 図の候補の画素のまとまりを、図の枠 [左, 上, 右, 下]（縮めた画像の画素）にする。
+      # 隣り合う画素を 1 画素膨らませてつなぎ、枠は膨らませる前の画素で取る。枠は、埋まった列・行の
+      # 最も長い連なりへ削る（trim_to_dense）。ページの端に接するもの（ページ上端の飾りの帯・色を
+      # 敷いた章扉）は図にしない。図にすると、その上の文字を本体が本文から除いてしまう
+      def figure_boxes(ink, width, height)
+        grown = ink.each_index.map { |cell| ink[cell] || neighbor_cells(cell, width, ink.size).any? { ink[it] } }
+        seen = Array.new(ink.size, false)
+        grown.each_index.filter_map do |start|
+          next unless grown[start] && !seen[start]
 
-            weight = Math.exp(-(offset**2) / denom)
-            weights += weight
-            total += values[position] * weight
+          # つながった画素を幅優先でたどる（each は、たどる途中で足した画素も回る）
+          seen[start] = true
+          cells = [start]
+          cells.each do |cell|
+            neighbor_cells(cell, width, ink.size).each do |neighbor|
+              next if seen[neighbor] || !grown[neighbor]
+
+              seen[neighbor] = true
+              cells << neighbor
+            end
           end
+          inked = cells.select { ink[it] }
+          next if inked.empty?
 
-          weights.positive? ? total / weights : values[index]
+          box = trim_to_dense(ink, width, [inked.map { it % width }.min, inked.map { it / width }.min, inked.map { it % width }.max + 1, inked.map { it / width }.max + 1])
+          box if box && figure_box?(box, cells.size, width, height)
         end
       end
 
-      # 画像高さに応じたガウシアン平滑化のシグマ値を算出する
-      def profile_smoothing_sigma(image_height)
-        (image_height * PROFILE_SMOOTHING_SIGMA_RATIO).clamp(MIN_PROFILE_SMOOTHING_SIGMA, MAX_PROFILE_SMOOTHING_SIGMA)
+      # 上下左右の画素の番号（左右の端では折り返さない）
+      def neighbor_cells(cell, width, size)
+        column = cell % width
+        [cell - width, cell + width, (cell - 1 if column.positive?), (cell + 1 if column < width - 1)].compact.select { it.between?(0, size - 1) }
       end
 
-      # プロファイル値の平均と標準偏差を算出する
-      def profile_statistics(values)
-        return { average: 0.0, stddev: 0.0 } if values.empty?
-
-        average = values.sum / values.length.to_f
-        variance = values.sum { (it - average)**2 } / values.length.to_f
-        { average:, stddev: Math.sqrt(variance) }
-      end
-
-      # 行プロファイルから閾値を超える連続領域を検出する
-      # max_gap 以内のギャップは同一領域として結合し、min_height 未満の領域は除外する
-      def find_regions_from_profile(profile, image_height, threshold: 0.5, max_gap:, min_height:)
-        regions = []
-        in_region = false
-        start_y = 0
-        gap = 0
-
-        Array(profile).each_with_index do |value, y|
-          if value.to_f >= threshold
-            start_y = y unless in_region
-            in_region = true
-            gap = 0
-          elsif in_region
-            gap += 1
-            next unless gap > max_gap
-
-            height = y - start_y - gap + 1
-            regions << { y: start_y, height: } if height >= min_height
-            in_region = false
-            gap = 0
-          end
+      # 枠を、図の画素が FIGURE_DENSE 以上埋まった列の最も長い連なりへ、続いて同じく行の連なりへ削る。
+      # 写真は埋まり、写真の横の消し残した字（小さなルビ・確信度の低い語）はまばらなので、写真に
+      # つながった本文の字の列が枠から外れる
+      def trim_to_dense(ink, width, box)
+        left, top, right, bottom = box
+        longest = lambda do |flags|
+          run = flags.each_with_index.chunk_while { |(a, i), (b, j)| a == b && j == i + 1 }.select { it.first.first }.max_by(&:size)
+          run && [run.first.last, run.last.last + 1]
         end
-
-        if in_region
-          height = image_height - start_y
-          regions << { y: start_y, height: } if height >= min_height
-        end
-
-        regions
+        dense_columns = (left...right).map { |x| (top...bottom).count { |y| ink[(y * width) + x] } >= (bottom - top) * FIGURE_DENSE }
+        columns = longest.(dense_columns) or return nil
+        left, right = left + columns[0], left + columns[1]
+        dense_rows = (top...bottom).map { |y| (left...right).count { |x| ink[(y * width) + x] } >= (right - left) * FIGURE_DENSE }
+        rows = longest.(dense_rows) or return nil
+        [left, top + rows[0], right, top + rows[1]]
       end
 
-      # 検出した行領域から列活性度を分析し、IllustrationRegion を構築する
-      # 面積比やアスペクト比で候補をフィルタリングする
-      def build_foreground_region(mask, group, image_width, image_height)
-        top = group.fetch(:y)
-        height = group.fetch(:height)
-        slice = mask.crop(0, top, image_width, height)
-        active_columns = column_activity(slice, image_width, height)
-        return nil if active_columns.empty?
+      # 図とみなす枠か。ページの端に接せず、辺と面積が下限を超え、まとまりの画素が枠の半分以上を埋める
+      def figure_box?(box, cells, width, height)
+        left, top, right, bottom = box
+        return false if left <= 1 || top <= 1 || right >= width - 1 || bottom >= height - 1
 
-        left = [active_columns.min - 8, 0].max
-        right = [active_columns.max + 9, image_width].min
-        width = right - left
-        candidate = IllustrationRegion.new(left:, top: [top - 8, 0].max, width:, height: [height + 16, image_height - top].min)
-        expanded = expand_illustration_region(candidate, image_width, image_height)
-        return nil unless illustration_region_candidate?(expanded, image_width, image_height)
-
-        area_ratio = (expanded.width * expanded.height).to_f / (image_width * image_height)
-        return nil if area_ratio < MIN_ILLUSTRATION_AREA_RATIO
-
-        expanded
-      rescue StandardError
-        nil
-      end
-
-      # マスク画像のスライスから前景活性のある列インデックスを収集する
-      def column_activity(slice, image_width, height)
-        (0...image_width).each_with_object([]) do |x, active|
-          column = slice.crop(x, 0, 1, height)
-          activity = column.avg / 255.0
-          active << x if activity >= COLUMN_ACTIVITY_THRESHOLD
-        end
-      end
-
-      # イラスト領域にパディングを追加して拡張する
-      def expand_illustration_region(region, image_width, image_height)
-        padding_x = [((region.width * 0.04).round), ((image_width * 0.01).round)].max
-        padding_y = [((region.height * 0.02).round), ((image_height * 0.005).round)].max
-        left = [region.left - padding_x, 0].max
-        top = [region.top - padding_y, 0].max
-        right = [region.left + region.width + padding_x, image_width].min
-        bottom = [region.top + region.height + padding_y, image_height].min
-
-        IllustrationRegion.new(left:, top:, width: [right - left, 1].max, height: [bottom - top, 1].max)
-      end
-
-      # 領域がイラストの候補として妥当か（サイズ・アスペクト比）を判定する
-      def illustration_region_candidate?(region, image_width, image_height)
-        return false unless region.width.positive? && region.height.positive?
-        return false if region.width < image_width * 0.35
-        return false if region.height < image_height * 0.08
-        return false if region.width * region.height < image_width * image_height * 0.035
-
-        aspect_ratio = region.width.to_f / region.height
-        aspect_ratio >= 1.05 && aspect_ratio <= 2.4
+        side = FIGURE_MIN_SIDE * width
+        area = (right - left) * (bottom - top)
+        right - left >= side && bottom - top >= side && area >= FIGURE_MIN_AREA * width * height && cells >= area * 0.5
       end
 
       # イラスト領域のピクセル座標を PDF ページ座標に変換し、ImageOccurrence を構築する

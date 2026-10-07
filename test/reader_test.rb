@@ -255,36 +255,34 @@ end
     assert_equal([], filtered)
   end
 
-  # find_regions_from_profile が小さなギャップを跨いで行をグループ化することを検証する
-  def test_find_regions_from_profile_groups_rows_across_small_gaps
+  # 図は、紙より濃い画素と色の付いた画素のまとまりで見つける。OCR で読めた文字の行は消してから探すので、
+  # 本文は図にならない。小さな札（見出しの帯の色の札）と、ページの端に接する帯（飾り）も図にしない
+  def test_should_find_figures_but_not_text_labels_or_edge_bands
+    skip "Vips is not available" unless vips_available?
+
     reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
-    profile = Array.new(40, 0) + Array.new(80, 1) + Array.new(12, 0) + Array.new(70, 1) + Array.new(60, 0)
+    page = { MediaBox: [0, 0, 595.0, 842.0] }
+    vips = reader.send(:require_vips!)
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "page.png")
+      canvas = vips::Image.black(2480, 3508, bands: 3).new_from_image([245, 245, 240])
+      canvas = canvas.draw_rect([90, 60, 40], 500, 700, 1000, 600, fill: true)    # 写真（約 240pt × 144pt）
+      canvas = canvas.draw_rect([30, 30, 30], 300, 2000, 1800, 300, fill: true)   # 字を読めた範囲（432pt × 72pt）
+      canvas = canvas.draw_rect([20, 150, 140], 300, 2400, 200, 120, fill: true)  # 見出しの色の札（48pt × 29pt）
+      canvas = canvas.draw_rect([230, 60, 80], 0, 0, 2480, 200, fill: true)       # ページ上端の飾りの帯
+      canvas.write_to_file(path)
+      # 字を読めた範囲（画像の 1px は 0.24pt）を、確信度の高い語として渡す。消さなければ図になる大きさ
+      words = [VivlioStarter::Pdf::Reader::OcrWord.new(text: "本文", x: 70.0, y: 290.0, width: 435.0, size: 74.0, conf: 95.0)]
 
-    regions = reader.send(:find_regions_from_profile, profile, profile.length, max_gap: 20, min_height: 100)
+      regions = reader.send(:extract_illustration_regions_vips, path, words, page)
 
-    assert_equal(1, regions.length)
-    assert_equal(40, regions.first.fetch(:y))
-    assert_equal(162, regions.first.fetch(:height))
-  end
-
-  # illustration_region_candidate? が大きなイラスト形状を受け入れることを検証する
-  def test_illustration_region_candidate_accepts_large_illustration_shape
-    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
-    region = VivlioStarter::Pdf::Reader::IllustrationRegion.new(left: 240.0, top: 420.0, width: 1480.0, height: 880.0)
-
-    accepted = reader.send(:illustration_region_candidate?, region, 2480.0, 3509.0)
-
-    assert_equal(true, accepted)
-  end
-
-  # illustration_region_candidate? がバナー状の横長領域を拒否することを検証する
-  def test_illustration_region_candidate_rejects_banner_like_wide_regions
-    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
-    region = VivlioStarter::Pdf::Reader::IllustrationRegion.new(left: 160.0, top: 215.0, width: 2040.0, height: 505.0)
-
-    accepted = reader.send(:illustration_region_candidate?, region, 2480.0, 3509.0)
-
-    assert_equal(false, accepted)
+      assert_equal(1, regions.size)
+      region = regions.first
+      assert_in_delta(500, region.left, 16)
+      assert_in_delta(700, region.top, 16)
+      assert_in_delta(1000, region.width, 16)
+      assert_in_delta(600, region.height, 16)
+    end
   end
 
   # ocr_image_occurrences が埋め込み画像がない場合に vips を使用することを検証する
@@ -340,9 +338,11 @@ end
       refute_includes(result[:page_texts].first, "Detected ")
       # **ページ全面のスキャン画像は図版として出さない。** それはページそのものであって
       # 図ではなく、Markdown に貼ると本文と同じ内容が二重になる
-      # （suppress_full_page_scans: resolution.ocr_applied）
-      assert_empty(result[:images])
-      refute_includes(result[:markdown], "![](images/scanned/")
+      # （suppress_full_page_scans: resolution.ocr_applied）。ページの中の図（見出しの下の青い四角）だけを
+      # 切り出す（extract_illustration_regions_vips）
+      assert_equal([1], result[:images].map { it[:page] })
+      assert_operator(result[:images].first[:width], :<, 420 * 0.5)
+      assert_includes(result[:markdown], "![](images/scanned/page-001-image-01.webp)")
     end
   end
 
