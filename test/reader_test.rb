@@ -568,10 +568,73 @@ end
       calls = 0
 
       reader.stub :run_tesseract, ->(*) { calls += 1 and ["", ""] } do
-        assert_equal(%w[text tsv], reader.send(:second_reading, path, dir, "text", "tsv"))
+        assert_equal(["text", "tsv", path], reader.send(:second_reading, path, dir, "text", "tsv"))
       end
       assert_equal(0, calls)
     end
+  end
+
+  # 英字の語の連なりは、位置の重なる英語の読みの語で、確信度が高ければ差し替える。和文の語と、
+  # 和文の語に重なる英語の読みの崩れた語は採らない。差し替えた語は元の行の番号を引き継ぐ
+  def test_should_replace_latin_words_with_confident_english_reading
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
+    header = %w[level page_num block_num par_num line_num word_num left top width height conf text]
+    japanese_english = [
+      header,
+      %w[4 1 2 1 3 0 100 200 600 40 -1],
+      %w[5 1 2 1 3 1 100 200 40 40 70.0 #],
+      %w[5 1 2 1 3 2 160 200 140 40 75.0 Gparam],
+      %w[5 1 2 1 3 3 320 200 200 40 95.0 シミュレーション]
+    ].map { it.join("\t") }.join("\n")
+    english = [
+      header,
+      %w[4 1 7 1 1 0 100 200 600 40 -1],
+      %w[5 1 7 1 1 1 100 200 40 40 90.0 #],
+      %w[5 1 7 1 1 2 158 200 172 40 92.0 @param],
+      %w[5 1 7 1 1 3 320 200 200 40 40.0 Va—a-a—]
+    ].map { it.join("\t") }.join("\n")
+
+    merged = reader.send(:parse_tsv_rows, reader.send(:merge_english_words, japanese_english, english))
+    words = merged.select { it.level == "5" }
+
+    assert_equal(%w[# @param シミュレーション], words.map(&:text))
+    assert_equal([%w[1 2 1 3]] * 3, words.map(&:line_key))
+    assert_equal([158.0, 142.0], [words[1].left, words[1].width]) # 枠は連なりの範囲（100〜300）に収める
+  end
+
+  # 食い違う語の英語の読みの確信度が低ければ（「11」を「lL」・35）、日本語＋英語の読みを残す
+  def test_should_keep_reading_when_english_reading_is_not_confident
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
+    header = %w[level page_num block_num par_num line_num word_num left top width height conf text]
+    japanese_english = [
+      header,
+      %w[4 1 1 1 1 0 100 200 300 40 -1],
+      %w[5 1 1 1 1 1 100 200 80 40 95.0 1915年],
+      %w[5 1 1 1 1 2 180 200 40 40 33.9 11],
+      %w[5 1 1 1 1 3 220 200 40 40 96.0 月]
+    ].map { it.join("\t") }.join("\n")
+    english = [header, %w[5 1 1 1 1 1 182 200 38 40 35.5 lL]].map { it.join("\t") }.join("\n")
+
+    merged = reader.send(:parse_tsv_rows, reader.send(:merge_english_words, japanese_english, english))
+
+    assert_equal(%w[1915年 11 月], merged.select { it.level == "5" }.map(&:text))
+  end
+
+  # 英語での読み直しは、英字の語が ENGLISH_PAGE_WORDS 以上のページだけ。言語が英語だけなら読み直さない
+  def test_should_read_english_again_only_on_pages_with_many_latin_words
+    header = %w[level page_num block_num par_num line_num word_num left top width height conf text].join("\t")
+    tsv = ->(count) { [header, *Array.new(count) { |i| ["5", "1", "1", "1", "1", i + 1, i * 50, 0, 40, 20, 90, "word#{i}"].join("\t") }].join("\n") }
+    japanese = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF, ocr: { languages: %w[jpn eng] })
+    english_only = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF, ocr: { languages: %w[eng] })
+    calls = []
+
+    [[japanese, 19], [japanese, 20], [english_only, 30]].each do |reader, count|
+      reader.stub :run_tesseract, ->(_path, _base, languages:) { calls << [count, languages] and ["", tsv.(count)] } do
+        reader.send(:english_reading, "page.png", "/tmp", tsv.(count))
+      end
+    end
+
+    assert_equal([[20, ["eng"]]], calls)
   end
 
   private

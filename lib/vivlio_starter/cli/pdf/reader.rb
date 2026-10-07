@@ -42,6 +42,30 @@ module VivlioStarter
       OcrResult = Data.define(:text, :lines, :blocks, :source_image_path, :image_width, :image_height, :temp_dir, :words) do
         def initialize(text:, lines:, blocks:, source_image_path:, image_width:, image_height:, temp_dir:, words: []) = super
       end
+      # Tesseract の TSV の 1 行。fields は書き戻すための元の列で、index は列名から列の位置を引く
+      TsvRow = Data.define(:fields, :index) do
+        def [](name) = fields[index.fetch(name)]
+        def level = self["level"]
+        def text = self["text"].to_s.strip
+        def left = self["left"].to_f
+        def top = self["top"].to_f
+        def width = self["width"].to_f
+        def height = self["height"].to_f
+        def right = left + width
+        def bottom = top + height
+        def center_x = left + (width / 2)
+        def center_y = top + (height / 2)
+        def conf = self["conf"].to_f
+        def line_key = LINE_KEY.map { self[it] }
+        # 英字の語か。空の語は、前後の英字の語の連なりを切らないよう英字の側に入れる
+        def latin? = text.empty? || text.match?(LATIN_WORD)
+
+        def with_fields(changes)
+          changed = fields.dup
+          changes.each { |name, value| changed[index.fetch(name)] = value.to_s }
+          with(fields: changed)
+        end
+      end
 
       # --- 二度読み（§2.2） ---
       # 囲みの地の割合がこれ以上のページだけ二度読みする。97 章のスキャンでは 23 ページ中 4 ページが
@@ -49,6 +73,18 @@ module VivlioStarter
       TWO_PASS_TINT = 0.08
       # 読みを選ぶ基準にする確信度
       CONFIDENT_WORD = 80
+
+      # --- 英語での読み直し（pdf-read-ocr-improvement-notes.md §4.6） ---
+      # 英字の語がこれ以上あるページだけ、英語の学習データでも読む。97 章のスキャンでは 24 ページ中
+      # 6〜8 ページ（コードのあるページ）が当たり、10〜30 のどこに置いても成績は変わらなかった
+      ENGLISH_PAGE_WORDS = 20
+      # 英語の読みを採るのに要る確信度。日本語＋英語の読みと食い違う語の平均で見る。
+      # 「11月」の「11」を英語の読みは「lL」（確信度 35）と読む
+      ENGLISH_MIN_CONFIDENCE = 60
+      # TSV で 1 行を表す列（ブロック・段落・行の番号）
+      LINE_KEY = %w[page_num block_num par_num line_num].freeze
+      # 英字の語（ASCII とラテン文字、英文の引用符とダッシュ）
+      LATIN_WORD = /\A[\p{ASCII}\p{Latin}‘’“”–—]+\z/
 
       # --- イラスト検出用定数 ---
       # イラスト領域とみなす最小面積比
@@ -537,12 +573,14 @@ module VivlioStarter
       end
 
       # 1 ページ分の OCR を実行し、OcrResult を返す
-      # ページ画像を用意し（§ ocr_source_image）、Tesseract でテキストと座標を一度に読む
+      # ページ画像を用意し（§ ocr_source_image）、Tesseract でテキストと座標を一度に読む。
+      # 囲みの多いページは二値化した画像でも読み、英字の多いページは英語の学習データでも読み直す
       def ocr_page_result(page, index, image_occurrences = [])
         temp_dir = Dir.mktmpdir("vivlio-pdf-ocr")
         source_image_path, image_width, image_height = ocr_source_image(page, index, image_occurrences, temp_dir)
         text, tsv = run_tesseract(source_image_path, File.join(temp_dir, "ocr"))
-        text, tsv = second_reading(source_image_path, temp_dir, text, tsv)
+        text, tsv, read_image_path = second_reading(source_image_path, temp_dir, text, tsv)
+        tsv = english_reading(read_image_path, temp_dir, tsv)
 
         OcrResult.new(
           text:,
@@ -658,20 +696,22 @@ module VivlioStarter
       # （pdf-read-ocr-postprocess-spec.md §2.2）。ページ全体にいつも二値化をかけると悪くなる
       # （F 値 89.7% → 85.8%）が、地の色の付いた囲みのページでは大きく効く（85.9% → 97.3%）。
       # 文字だけのページは 1 回で済ませる。選ぶ基準は確信度の平均ではなく、確信度の高い語の字数にする。
-      # 平均で選ぶと、字を落とした読み（433 字 → 325 字）を選ぶことがある
+      # 平均で選ぶと、字を落とした読み（433 字 → 325 字）を選ぶことがある。
+      # 選んだ読みの画像も返す。英語での読み直し（english_reading）は同じ画像を読む
+      # @return [Array(String, String, String)] [テキスト, TSV, 読んだ画像のパス]
       def second_reading(image_path, temp_dir, text, tsv)
-        return [text, tsv] unless vips_available?
+        return [text, tsv, image_path] unless vips_available?
 
         image = require_vips!::Image.new_from_file(image_path).colourspace(:b_w).extract_band(0)
         histogram = image.hist_find.to_a.flatten
-        return [text, tsv] if tint_ratio(histogram) < TWO_PASS_TINT
+        return [text, tsv, image_path] if tint_ratio(histogram) < TWO_PASS_TINT
 
         binarized = File.join(temp_dir, "page-otsu.png")
         (image > otsu_threshold(histogram)).write_to_file(binarized)
         other_text, other_tsv = run_tesseract(binarized, File.join(temp_dir, "ocr-otsu"))
-        confident_characters(other_tsv) > confident_characters(tsv) ? [other_text, other_tsv] : [text, tsv]
+        confident_characters(other_tsv) > confident_characters(tsv) ? [other_text, other_tsv, binarized] : [text, tsv, image_path]
       rescue StandardError
-        [text, tsv]
+        [text, tsv, image_path]
       end
 
       # 囲みの地の割合。紙の明るさ（中央値）より 10〜60 暗い面で、囲みや網掛けの背景がここに入る。
@@ -718,11 +758,106 @@ module VivlioStarter
         end
       end
 
+      # 英字の多いページだけ、英語の学習データでも読み、英字の語を語の位置で突き合わせて採る
+      # （pdf-read-ocr-improvement-notes.md §4.6）。日本語＋英語で読むと、コードの `@param` を `Gparam`、
+      # `velocity` を `vetoctty` と読み違える。英語だけで読むとコードはよく読めるが、和文はすべて崩れる。
+      # そこで和文の語は日本語＋英語の読みのまま残し、英字の語の連なりだけを差し替える。
+      # 97 章のスキャンで、英字の語は 205 → 212（最高・600dpi）、195 → 205（普通・300dpi）になった
+      def english_reading(image_path, temp_dir, tsv)
+        return tsv unless @ocr.languages.include?("eng") && @ocr.languages.size > 1
+
+        rows = parse_tsv_rows(tsv)
+        return tsv if rows.count { it.level == "5" && it.latin? && it.text.match?(/[A-Za-z]/) } < ENGLISH_PAGE_WORDS
+
+        _text, english_tsv = run_tesseract(image_path, File.join(temp_dir, "ocr-eng"), languages: ["eng"])
+        merge_english_words(tsv, english_tsv)
+      rescue StandardError
+        tsv
+      end
+
+      # 日本語＋英語の読みの各行で、英字の語の連なり（和文の語にはさまれた範囲）ごとに、英語の読みの語を
+      # 当てはめる（english_replacement）。差し替えた語には元の行の番号を付けるので、本体に渡す語の
+      # ベースラインと大きさは、日本語＋英語の読みの行の枠から取られる（extract_ocr_words）
+      def merge_english_words(tsv, english_tsv)
+        rows = parse_tsv_rows(tsv)
+        english_words = parse_tsv_rows(english_tsv).select { it.level == "5" && !it.text.empty? && it.latin? }
+        lines = rows.select { it.level == "4" }.to_h { [it.line_key, it] }
+
+        merged = rows.slice_when { |a, b| a.level != "5" || b.level != "5" || a.line_key != b.line_key }.flat_map do |group|
+          line = lines[group.first.line_key]
+          next group unless group.first.level == "5" && line
+
+          group.chunk_while { |a, b| a.latin? && b.latin? }.flat_map do |run|
+            replacement = english_replacement(run, group, line, english_words)
+            next run unless replacement
+
+            english_words -= replacement
+            replacement.map { relocate_english_word(it, run) }
+          end
+        end
+        "#{[tsv.lines.first.chomp, *merged.map { it.fields.join("\t") }].join("\n")}\n"
+      end
+
+      # 英字の語の連なり run に当てはめる英語の読みの語を返す（当てはめないなら nil）。
+      # 中心が run の範囲（横は語の両端、縦は行の枠）に入る語を集め、次をすべて満たすときに採る。
+      # - 2 つの読みで食い違う語について、英語の読みの確信度の平均が ENGLISH_MIN_CONFIDENCE 以上で、
+      #   日本語＋英語の読みより高い。run 全体の平均で比べると、確信度の高い共通の語（`showcase}`）に
+      #   引っ張られて、「::」を「3:」と読んだ側を採ってしまう
+      # - 英語の読みの語が run の幅の 8 割以上を覆い、字数が 0.6〜1.6 倍に収まる。端の「"」や「:」を
+      #   落とした読みを採らない
+      def english_replacement(run, line_words, line, english_words)
+        return nil unless run.all?(&:latin?) && run.any? { it.text.match?(/[A-Za-z0-9]/) }
+
+        left = run.map(&:left).min
+        right = run.map(&:right).max
+        japanese = line_words.reject(&:latin?)
+        candidates = english_words.select do |word|
+          word.center_x.between?(left, right) && word.center_y.between?(line.top, line.bottom) &&
+            japanese.none? { [word.right, it.right].min - [word.left, it.left].max > word.width / 2 }
+        end
+        return nil if candidates.empty?
+
+        differing = candidates.reject { |word| run.any? { it.text == word.text } }
+        replaced = run.reject { |word| candidates.any? { it.text == word.text } }
+        return nil if differing.empty?
+        return nil unless mean_confidence(differing) >= ENGLISH_MIN_CONFIDENCE && mean_confidence(differing) > mean_confidence(replaced)
+
+        characters = run.sum { it.text.length }
+        covered = [candidates.map(&:right).max, right].min - [candidates.map(&:left).min, left].max
+        return nil unless candidates.sum { it.text.length }.between?(characters * 0.6, characters * 1.6)
+        return nil if covered < (right - left) * 0.8
+
+        candidates
+      end
+
+      # 英語の読みの語を、日本語＋英語の読みの行へ移す。行の番号を合わせ、枠は run の範囲に収める。
+      # 枠がはみ出すと、隣の和文の語との空白が消える（「方向に delta」→「方向にdelta」）
+      def relocate_english_word(word, run)
+        left = [word.left, run.map(&:left).min].max
+        right = [word.right, run.map(&:right).max].min
+        word.with_fields(LINE_KEY.to_h { [it, run.first[it]] }.merge("left" => left.round, "width" => [right - left, 1].max.round))
+      end
+
+      # 字数で重みを付けた確信度の平均。語が無ければ 0
+      def mean_confidence(words)
+        characters = words.sum { it.text.length }
+        characters.zero? ? 0.0 : words.sum { it.conf * it.text.length } / characters
+      end
+
+      # Tesseract の TSV を TsvRow の並びにする（見出しの行は除く）
+      def parse_tsv_rows(tsv)
+        header, *rows = tsv.to_s.lines.map { it.chomp.split("\t", -1) }
+        return [] unless header
+
+        index = header.each_with_index.to_h
+        rows.map { TsvRow.new(fields: it.fill("", it.length...header.length), index:) }
+      end
+
       # Tesseract を 1 回だけ起動し、プレーンテキストと TSV（座標）を同時に書き出す。
       # 以前は TSV 用とテキスト用に 2 回起動していた。テキストは TSV から行を組めなかったときの予備
       # @return [Array(String, String)] [テキスト, TSV]
-      def run_tesseract(image_path, output_base)
-        command = ["tesseract", image_path, output_base, "-l", @ocr.languages.join("+"), "--psm", @ocr.psm.to_s, "txt", "tsv"]
+      def run_tesseract(image_path, output_base, languages: @ocr.languages)
+        command = ["tesseract", image_path, output_base, "-l", languages.join("+"), "--psm", @ocr.psm.to_s, "txt", "tsv"]
         stdout, stderr, status = Open3.capture3(*command)
         raise Error, [stderr, stdout].find { !it.to_s.strip.empty? }.to_s.strip unless status.success?
 
