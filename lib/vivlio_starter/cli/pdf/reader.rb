@@ -74,6 +74,18 @@ module VivlioStarter
       # 読みを選ぶ基準にする確信度
       CONFIDENT_WORD = 80
 
+      # --- 読み飛ばした範囲の読み直し（pdf-read-ocr-improvement-notes.md §4.11） ---
+      # 読み直す範囲の大きさの下限（ページの幅を 595 とした単位。A4 なら pt）
+      REREAD_MIN_WIDTH = 60
+      REREAD_MIN_HEIGHT = 18
+      # すでに読めた語がこれを超えて覆う範囲は読み直さない。地の色の付いた囲みの中の文やコードは、別の
+      # ブロックで読めていて 15〜30% を覆う。読み直して置き換えると、良くなる行と悪くなる行が混じった
+      # （最高・600dpi で F 値 91.4% → 90.7%）。表や色の帯の見出しは 0〜9%
+      REREAD_MAX_COVERAGE = 0.1
+      # 切り出すときの余白（画像の幅に対する割合。300dpi の A4 で 24px）。読み直しは切り出し方に敏感で、
+      # 97 章では 20〜30px の間でも F 値が 0.2 ポイント上下した
+      REREAD_PADDING = 24 / 2480.0
+
       # --- 英語での読み直し（pdf-read-ocr-improvement-notes.md §4.6） ---
       # 英字の語がこれ以上あるページだけ、英語の学習データでも読む。97 章のスキャンでは 24 ページ中
       # 6〜8 ページ（コードのあるページ）が当たり、10〜30 のどこに置いても成績は変わらなかった
@@ -579,6 +591,7 @@ module VivlioStarter
         source_image_path, image_width, image_height = ocr_source_image(page, index, image_occurrences, temp_dir)
         text, tsv = run_tesseract(source_image_path, File.join(temp_dir, "ocr"))
         text, tsv, read_image_path = second_reading(source_image_path, temp_dir, text, tsv)
+        tsv = reread_skipped_regions(read_image_path, temp_dir, tsv, page)
         tsv = english_reading(read_image_path, temp_dir, tsv)
 
         OcrResult.new(
@@ -755,6 +768,87 @@ module VivlioStarter
 
           row[index["text"]].to_s.strip.length
         end
+      end
+
+      # Tesseract が文字の無い範囲とみなして読み飛ばした所を、切り出して読み直す
+      # （pdf-read-ocr-improvement-notes.md §4.11）。ページ全体を読むと、Tesseract は先に紙面の割り付けを
+      # 推定し、罫線で囲んだ表や色の帯の中の見出しを「文字の無いブロック」として読み飛ばす。切り出して
+      # 渡すとその推定に邪魔されずに読める（97 章の表 H-1 は「金属」「カリウム 2.2」が抜け落ちていた）。
+      # 読み直しの確信度の高い字が十分にあり、もとの読みより多いときだけ、その範囲の語を置き換える。
+      # 写真を読み直しても確信度の低い読み違いしか出ないので、置き換わらない。図の範囲（extract_illustration_regions_vips）と
+      # 重なる所は読み直さない。絵に描き込まれた英語の題がきれいに読めて本文に入り、その字を消して図を探すので
+      # 図も見つからなくなった（97 章のキログラムの絵）
+      def reread_skipped_regions(image_path, temp_dir, tsv, page)
+        rows = parse_tsv_rows(tsv)
+        words = rows.select { it.level == "5" && !it.text.empty? }
+        image = require_vips!::Image.new_from_file(image_path)
+        replaced = []
+        added = []
+        figures = extract_illustration_regions_vips(image_path, extract_ocr_words(tsv, page), page).map { [it.left, it.top, it.left + it.width, it.top + it.height] }
+        regions = skipped_regions(rows, words, image.width, image.height).reject do |box|
+          figures.any? { |figure| [[box[2], figure[2]].min - [box[0], figure[0]].max, 0].max * [[box[3], figure[3]].min - [box[1], figure[1]].max, 0].max > (box[2] - box[0]) * (box[3] - box[1]) * 0.3 }
+        end
+        regions.each_with_index do |box, number|
+          inside = words.select { it.center_x.between?(box[0], box[2]) && it.center_y.between?(box[1], box[3]) }
+          left, top, crop = crop_for_reread(image, box, temp_dir, number)
+          _text, region_tsv = run_tesseract(crop, File.join(temp_dir, "reread-#{number}"))
+          region_rows = parse_tsv_rows(region_tsv).reject { it.level == "1" }
+          next unless better_reading?(region_rows, inside)
+
+          replaced.concat(inside)
+          added.concat(region_rows.map do |row|
+            row.with_fields("left" => row.left.round + left, "top" => row.top.round + top, "block_num" => row["block_num"].to_i + (1000 * (number + 1)))
+          end)
+        end
+        return tsv if added.empty?
+
+        "#{[tsv.lines.first.chomp, *(rows - replaced).map { it.fields.join("\t") }, *added.map { it.fields.join("\t") }].join("\n")}\n"
+      rescue StandardError
+        tsv
+      end
+
+      # 読み直す範囲 [左, 上, 右, 下]（画素）。語の無いブロックのうち、接し合うものを 1 つにまとめる（表は
+      # 罫線で区切られた幾つものブロックになり、別々に読むと切り口の字を読み違える）。小さいもの、ページの
+      # 半分を超えるもの、すでに読めた語が REREAD_MAX_COVERAGE を超えて覆うもの（地の色の付いた囲みの
+      # 中の文は別のブロックで読めている）は除く
+      def skipped_regions(rows, words, width, height)
+        word_blocks = words.map { it["block_num"] }.uniq
+        unit = width / 595.0
+        boxes = rows.select { it.level == "2" && !word_blocks.include?(it["block_num"]) }.map { [it.left, it.top, it.right, it.bottom] }
+        clusters = []
+        boxes.each do |box|
+          joined = clusters.select { |group| group.any? { touching?(it, box, unit * 2) } }
+          clusters = clusters - joined + [joined.flatten(1) + [box]]
+        end
+        clusters.map { |group| [group.map { it[0] }.min, group.map { it[1] }.min, group.map { it[2] }.max, group.map { it[3] }.max] }.select do |left, top, right, bottom|
+          area = (right - left) * (bottom - top)
+          covered = words.sum { [[it.right, right].min - [it.left, left].max, 0].max * [[it.bottom, bottom].min - [it.top, top].max, 0].max }
+          right - left >= REREAD_MIN_WIDTH * unit && bottom - top >= REREAD_MIN_HEIGHT * unit && area <= width * height * 0.5 && covered <= area * REREAD_MAX_COVERAGE
+        end
+      end
+
+      def touching?(a, b, gap) = a[0] - gap <= b[2] && b[0] - gap <= a[2] && a[1] - gap <= b[3] && b[1] - gap <= a[3]
+
+      # 範囲を余白つきで切り出して書き、[左, 上, パス] を返す。余白が狭いと字を読み違え（8px で「カリウム 2.2」が
+      # 「Ze」）、広いと周りの本文が入る（48px）
+      def crop_for_reread(image, box, temp_dir, number)
+        padding = (image.width * REREAD_PADDING).round
+        left = [box[0].floor - padding, 0].max
+        top = [box[1].floor - padding, 0].max
+        right = [box[2].ceil + padding, image.width].min
+        bottom = [box[3].ceil + padding, image.height].min
+        path = File.join(temp_dir, "reread-#{number}.png")
+        image.crop(left, top, right - left, bottom - top).write_to_file(path)
+        [left, top, path]
+      end
+
+      # 読み直しを採るか。確信度 CONFIDENT_WORD 以上の字が 4 字以上で、読んだ字の半分以上を占め、
+      # もとの読みのその範囲の確信度の高い字より多いこと
+      def better_reading?(region_rows, inside)
+        region_words = region_rows.select { it.level == "5" && !it.text.empty? }
+        confident = ->(words) { words.select { it.conf >= CONFIDENT_WORD }.sum { it.text.length } }
+        confident.(region_words) >= 4 && confident.(region_words) * 2 >= region_words.sum { it.text.length } &&
+          confident.(region_words) > confident.(inside)
       end
 
       # 英字の多いページだけ、英語の学習データでも読み、英字の語を語の位置で突き合わせて採る

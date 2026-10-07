@@ -637,6 +637,60 @@ end
     assert_equal([[20, ["eng"]]], calls)
   end
 
+  # Tesseract が読み飛ばした範囲（語の無いブロック）は、接し合うものをまとめて読み直す範囲にする。
+  # 小さいものと、すでに読めた語が覆っているもの（囲みの中の文が別のブロックで読めている）は除く
+  def test_should_find_skipped_regions_to_read_again
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
+    header = %w[level page_num block_num par_num line_num word_num left top width height conf text]
+    rows = [
+      header,
+      %w[2 1 1 0 0 0 400 1000 800 100 -1], # 表の見出しの行（罫線で区切られた）
+      %w[2 1 2 0 0 0 400 1100 800 200 -1], # 表の本体。上のブロックと接する
+      %w[2 1 3 0 0 0 400 2000 100 40 -1],  # 小さい
+      %w[2 1 4 0 0 0 300 2500 1800 300 -1], # 囲み。中の文は別のブロック 5 で読めている
+      %w[2 1 5 0 0 0 320 2520 1700 260 -1],
+      %w[5 1 5 1 1 1 320 2520 1700 260 95 本文]
+    ].map { it.join("\t") }.join("\n")
+    parsed = reader.send(:parse_tsv_rows, rows)
+    words = parsed.select { it.level == "5" }
+
+    assert_equal([[400.0, 1000.0, 1200.0, 1300.0]], reader.send(:skipped_regions, parsed, words, 2480, 3508))
+  end
+
+  # 読み直しは、確信度の高い字が十分にあり、もとの読みより多いときだけ採る。その範囲の語は読み直した語で
+  # 置き換え、位置は切り出した所からページの画素へ戻す
+  def test_should_replace_words_in_region_read_again
+    skip "Vips is not available" unless vips_available?
+
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
+    header = %w[level page_num block_num par_num line_num word_num left top width height conf text]
+    page_tsv = [
+      header,
+      %w[2 1 1 0 0 0 400 1000 800 300 -1],
+      %w[5 1 2 1 1 1 1000 1100 100 40 95 5.32]
+    ].map { it.join("\t") }.join("\n")
+    region_tsv = [
+      header,
+      %w[1 1 0 0 0 0 0 0 848 348 -1],
+      %w[4 1 1 1 1 0 30 30 700 40 -1],
+      %w[5 1 1 1 1 1 30 30 200 40 96 カリウム],
+      %w[5 1 1 1 1 2 300 30 80 40 95 2.2],
+      %w[5 1 1 1 1 3 600 30 100 40 94 5.32]
+    ].map { it.join("\t") }.join("\n")
+
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "page.png")
+      reader.send(:require_vips!)::Image.black(2480, 3508).invert.write_to_file(path)
+      merged = reader.stub(:run_tesseract, ["", region_tsv]) { reader.send(:reread_skipped_regions, path, dir, page_tsv, { MediaBox: [0, 0, 595.0, 842.0] }) }
+      words = reader.send(:parse_tsv_rows, merged).select { it.level == "5" }
+
+      assert_equal(%w[カリウム 2.2 5.32], words.map(&:text))
+      assert_equal([406.0, 1006.0], [words.first.left, words.first.top]) # 余白 24px を引いた (376, 976) から
+      unreadable = [header, %w[1 1 0 0 0 0 0 0 848 348 -1], %w[5 1 1 1 1 1 30 30 200 40 35 Ze]].map { it.join("\t") }.join("\n")
+      assert_equal(page_tsv, reader.stub(:run_tesseract, ["", unreadable]) { reader.send(:reread_skipped_regions, path, dir, page_tsv, { MediaBox: [0, 0, 595.0, 842.0] }) })
+    end
+  end
+
   private
 
   # ImageMagick（magick または convert）が PATH 上で利用可能かを確認する
