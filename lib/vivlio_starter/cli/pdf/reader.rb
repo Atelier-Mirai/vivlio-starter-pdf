@@ -130,6 +130,11 @@ module VivlioStarter
       FIGURE_MIN_AREA = 6000 / (595.0 * 842.0)
       # 図の枠を削るときに残す、図の画素の埋まった列・行の割合
       FIGURE_DENSE = 0.3
+      # 埋まった列・行のあいだで続きとみなす、少しは埋まった列・行の割合の下限と本数の上限（trim_to_dense）。
+      # 本数は縮めた画像の画素で、8 本は約 15pt。97 章では 4 本以下だと光格子時計の絵の上の帯（6 本）で切れ、
+      # 8 本と 12 本は同じ結果だった。ほぼ空の列・行（写真の横の字を消した跡・図の題との空き）はつながない
+      FIGURE_SPARSE = 0.1
+      FIGURE_BRIDGE = 8
 
       # --- OCR に回す画像 ---
       # 埋め込みのスキャン画像がこの幅（px）に届かなければ、vips で拡大してから読む。
@@ -385,6 +390,8 @@ module VivlioStarter
           page_words:,
           page_sizes:
         }
+      ensure
+        FileUtils.rm_rf(@poppler_dir) if @poppler_dir
       end
 
       private
@@ -479,13 +486,53 @@ module VivlioStarter
         occurrences.each_with_index do |occurrence, image_index|
           filename = format("page-%03d-image-%02d.webp", index + 1, image_index + 1)
           output_path = File.join(@images_dir, filename)
-          write_image_as_webp(occurrence.object, output_path)
+          next unless write_extracted_image(occurrence.object, index + 1, output_path)
+
           assets << build_image_asset(index, image_index + 1, filename, output_path, occurrence)
         rescue StandardError
           next
         end
 
         assets
+      end
+
+      # 画像を書き出し、書けたかを返す。HexaPDF で書けない画像は、poppler の pdfimages で同じオブジェクトを
+      # 書き出す（pdf-read-ocr-improvement-notes.md §4.20）。HexaPDF は、色の表（Indexed）を別のオブジェクトに
+      # 置いた画像の情報を読めずに例外を出す（TeX の fundamentals-of-system-design.pdf の回路図 18 個）
+      def write_extracted_image(object, page_number, output_path)
+        write_image_as_webp(object, output_path)
+        true
+      rescue StandardError
+        write_poppler_image(object, page_number, output_path)
+      end
+
+      def write_poppler_image(object, page_number, output_path)
+        return false unless object.respond_to?(:oid) && object.oid.to_i.positive? && command_in_path?("pdfimages")
+
+        source = poppler_page_images(page_number)[object.oid]
+        return false unless source
+
+        _stdout, status = Open3.capture2e(*image_convert_command(source, output_path))
+        status.success?
+      end
+
+      # pdfimages で 1 ページの画像を PNG に書き出し、{オブジェクトの番号 => PNG のパス} を返す（ページごとに 1 回）。
+      # ファイル名の番号は -list の num と同じ。透明度（smask）の行は除く
+      def poppler_page_images(page_number)
+        @poppler_images ||= {}
+        @poppler_images[page_number] ||= begin
+          @poppler_dir ||= Dir.mktmpdir("vivlio-pdf-images")
+          prefix = File.join(@poppler_dir, format("page-%03d", page_number))
+          range = ["-f", page_number.to_s, "-l", page_number.to_s]
+          list, = Open3.capture2e("pdfimages", "-list", *range, pdf_path)
+          Open3.capture2e("pdfimages", "-png", *range, pdf_path, prefix)
+          list.lines.drop(2).filter_map do |line|
+            columns = line.split
+            next unless columns[2] == "image"
+
+            [columns[10].to_i, format("%s-%03d.png", prefix, columns[1].to_i)]
+          end.to_h.select { |_oid, file| File.file?(file) }
+        end
       end
 
       # テキスト行と画像参照を Y 座標順に統合し、ページチャンク文字列を構築する
@@ -1338,19 +1385,34 @@ module VivlioStarter
 
       # 枠を、図の画素が FIGURE_DENSE 以上埋まった列の最も長い連なりへ、続いて同じく行の連なりへ削る。
       # 写真は埋まり、写真の横の消し残した字（小さなルビ・確信度の低い語）はまばらなので、写真に
-      # つながった本文の字の列が枠から外れる
+      # つながった本文の字の列が枠から外れる。
+      # 埋まった列・行のあいだに、少しは埋まった（FIGURE_SPARSE 以上の）列・行が FIGURE_BRIDGE 本以内はさまる
+      # だけなら、続きとみなす。白地の多い絵や表紙は、区画の境目にそうした行がはさまり、そこで切れて
+      # 絵の上の 4 割や表紙の下半分を落としていた（97 章の光格子時計の絵と『量子力学』の表紙・
+      # pdf-read-ocr-improvement-notes.md §4.20）
       def trim_to_dense(ink, width, box)
         left, top, right, bottom = box
-        longest = lambda do |flags|
+        longest = lambda do |ratios|
+          flags = bridge_sparse(ratios.map { it >= FIGURE_DENSE }, ratios)
           run = flags.each_with_index.chunk_while { |(a, i), (b, j)| a == b && j == i + 1 }.select { it.first.first }.max_by(&:size)
           run && [run.first.last, run.last.last + 1]
         end
-        dense_columns = (left...right).map { |x| (top...bottom).count { |y| ink[(y * width) + x] } >= (bottom - top) * FIGURE_DENSE }
-        columns = longest.(dense_columns) or return nil
+        column_ratios = (left...right).map { |x| (top...bottom).count { |y| ink[(y * width) + x] }.fdiv(bottom - top) }
+        columns = longest.(column_ratios) or return nil
         left, right = left + columns[0], left + columns[1]
-        dense_rows = (top...bottom).map { |y| (left...right).count { |x| ink[(y * width) + x] } >= (right - left) * FIGURE_DENSE }
-        rows = longest.(dense_rows) or return nil
+        row_ratios = (top...bottom).map { |y| (left...right).count { |x| ink[(y * width) + x] }.fdiv(right - left) }
+        rows = longest.(row_ratios) or return nil
         [left, top + rows[0], right, top + rows[1]]
+      end
+
+      # 埋まった列・行にはさまれた、FIGURE_BRIDGE 本以内の少しは埋まった列・行を、埋まったものとみなす
+      def bridge_sparse(flags, ratios)
+        flags.each_index.chunk_while { |i, j| flags[i] == flags[j] }.each_with_object(flags.dup) do |run, bridged|
+          next if flags[run.first] || run.size > FIGURE_BRIDGE || run.first.zero? || run.last == flags.size - 1
+          next unless run.all? { ratios[it] >= FIGURE_SPARSE }
+
+          run.each { bridged[it] = true }
+        end
       end
 
       # 図とみなす枠か。ページの端に接せず、辺と面積が下限を超え、まとまりの画素が枠の半分以上を埋める

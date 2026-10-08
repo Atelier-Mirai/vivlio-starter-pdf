@@ -307,6 +307,51 @@ end
     end
   end
 
+  # 白地の多い絵は、区画の境目に少しだけ埋まった行がはさまる。埋まった行のあいだの 8 本以内のそうした行は
+  # 続きとみなし、絵の片方だけに削らない
+  def test_should_bridge_sparse_rows_inside_figure
+    skip "Vips is not available" unless vips_available?
+
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
+    vips = reader.send(:require_vips!)
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "page.png")
+      canvas = vips::Image.black(2480, 3508, bands: 3).new_from_image([245, 245, 240])
+      # 縮めた画像（1/8）の画素の境目にそろえて描く。帯の縦線は 8 画素ごとに 1 画素で、帯の行は 1 割強だけ埋まる
+      canvas = canvas.draw_rect([60, 60, 60], 504, 1000, 960, 240, fill: true) # 上の区画
+      (0...15).each { canvas = canvas.draw_rect([60, 60, 60], 504 + (it * 64), 1240, 8, 48, fill: true) } # 少しだけ埋まった帯（6 行）
+      canvas = canvas.draw_rect([60, 60, 60], 504, 1288, 960, 240, fill: true) # 下の区画
+      canvas.write_to_file(path)
+
+      regions = reader.send(:extract_illustration_regions_vips, path, [], { MediaBox: [0, 0, 595.0, 842.0] })
+
+      assert_equal(1, regions.size)
+      assert_in_delta(1000, regions.first.top, 16)
+      assert_in_delta(528, regions.first.height, 16)
+    end
+  end
+
+  # HexaPDF で書き出せない画像（色の表を別のオブジェクトに置いた Indexed など）は、pdfimages で同じ
+  # オブジェクトを書き出す
+  def test_should_write_image_with_pdfimages_when_hexapdf_cannot
+    skip "ImageMagick か pdfimages が無い" unless imagemagick_available? && command_available?("pdfimages")
+
+    Dir.mktmpdir do |dir|
+      png = File.join(dir, "figure.png")
+      system("magick", "-size", "120x80", "xc:steelblue", png)
+      pdf = File.join(dir, "figure.pdf")
+      document = HexaPDF::Document.new
+      document.pages.add([0, 0, 595, 842]).canvas.image(png, at: [100, 500], width: 240)
+      document.write(pdf)
+      reader = VivlioStarter::Pdf::Reader.new(pdf, images_dir: File.join(dir, "images"), ocr: { mode: "disable" })
+
+      result = reader.stub(:write_image_as_webp, ->(*) { raise TypeError, "HexaPDF が読めない画像" }) { reader.execute }
+
+      assert_equal(["page-001-image-01.webp"], result[:images].map { it[:filename] })
+      assert(File.size?(File.join(dir, "images", "page-001-image-01.webp")))
+    end
+  end
+
   # 本体と book.yml は OCR を切る値を disable と書く。以前は disable を知らず :auto にしていた
   def test_should_accept_disable_as_ocr_off
     %w[disable disabled never off].each do |value|
