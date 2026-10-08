@@ -1287,7 +1287,7 @@ module VivlioStarter
         end
       end
 
-      # 図の候補の画素のまとまりを、図の枠 [左, 上, 右, 下]（縮めた画像の画素）にする。
+      # 図の候補の画素のまとまりを、図の枠 [左, 上, 右, 下]（縮めた画像の画素）にする（pdf-read-ocr-improvement-notes.md §4.17）。
       # 隣り合う画素を 1 画素膨らませてつなぎ、枠は膨らませる前の画素で取る。枠は、埋まった列・行の
       # 最も長い連なりへ削る（trim_to_dense）。ページの端に接するもの（ページ上端の飾りの帯・色を
       # 敷いた章扉）は図にしない。図にすると、その上の文字を本体が本文から除いてしまう
@@ -1311,8 +1311,12 @@ module VivlioStarter
           inked = cells.select { ink[it] }
           next if inked.empty?
 
-          box = trim_to_dense(ink, width, [inked.map { it % width }.min, inked.map { it / width }.min, inked.map { it % width }.max + 1, inked.map { it / width }.max + 1])
-          box if box && figure_box?(box, cells.size, width, height)
+          whole = [inked.map { it % width }.min, inked.map { it / width }.min, inked.map { it % width }.max + 1, inked.map { it / width }.max + 1]
+          box = trim_to_dense(ink, width, whole)
+          next box if box && figure_box?(box, cells.size, width, height)
+          # 白地の多い絵は、埋まった列・行がまばらで、削ると下限より小さくなる（97 章の光格子時計の絵が
+          # 130×78pt から 48×18 画素に）。削る前の枠が図の条件を満たせば、そちらを採る
+          whole if figure_box?(whole, cells.size, width, height)
         end
       end
 

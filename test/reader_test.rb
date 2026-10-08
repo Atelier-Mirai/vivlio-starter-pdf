@@ -285,6 +285,28 @@ end
     end
   end
 
+  # 白地の多い絵（細い線の格子）は、埋まった列・行が飛び飛びで、枠を削ると消える。削る前の枠を採る
+  def test_should_keep_whole_box_of_sparse_illustration
+    skip "Vips is not available" unless vips_available?
+
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
+    vips = reader.send(:require_vips!)
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "page.png")
+      canvas = vips::Image.black(2480, 3508, bands: 3).new_from_image([245, 245, 240])
+      (0..30).each { canvas = canvas.draw_rect([40, 40, 40], 500 + (it * 32), 1000, 8, 640, fill: true) } # 縦の線（約 230pt × 154pt）
+      (0..20).each { canvas = canvas.draw_rect([40, 40, 40], 500, 1000 + (it * 32), 968, 8, fill: true) } # 横の線
+      canvas.write_to_file(path)
+
+      regions = reader.send(:extract_illustration_regions_vips, path, [], { MediaBox: [0, 0, 595.0, 842.0] })
+
+      assert_equal(1, regions.size)
+      assert_in_delta(500, regions.first.left, 16)
+      assert_in_delta(968, regions.first.width, 16)
+      assert_in_delta(648, regions.first.height, 16)
+    end
+  end
+
   # ocr_image_occurrences が埋め込み画像がない場合に vips を使用することを検証する
   def test_ocr_image_occurrences_uses_vips_when_embedded_images_are_absent
     reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
