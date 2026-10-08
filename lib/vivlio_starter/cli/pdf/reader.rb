@@ -155,6 +155,16 @@ module VivlioStarter
           @image_occurrences = []
         end
 
+        # 1 つの命令の失敗で、ページの読み取りを止めない（pdf-read-ocr-improvement-notes.md §4.19）。HexaPDF は、
+        # 資源に無い色空間（dvipdfmx の `/CS0 cs`）や縦書きの字（「Not yet implemented」）で例外を出す。
+        # 以前はページの読み取りが止まり、そのページの文字も画像の位置も捨てていた（探究 Rust・Rust レシピで画像 0 枚）。
+        # 失敗した命令だけを飛ばす。色空間も縦書きの字の位置も、画像の位置と横書きの文字には要らない
+        def process(operator, operands = [])
+          super
+        rescue StandardError
+          nil
+        end
+
         # PDF オペレータ Tj: テキスト表示
         def show_text(data)
           collect_text_box(decode_text_with_positioning(data))
@@ -1738,12 +1748,13 @@ module VivlioStarter
         )
       end
 
-      # OCR モードを :auto / :always / :never に正規化する
+      # OCR モードを :auto / :always / :never に正規化する。本体と book.yml は切る値を disable と書く
+      # （以前は disable を知らず :auto にしていて、OCR が切れなかった。pdf-read-ocr-improvement-notes.md §4.19）
       def normalize_ocr_mode(value)
         case value.to_s.strip.downcase
         in "" | "auto" then :auto
         in "always" | "force" | "true" then :always
-        in "never" | "false" | "off" then :never
+        in "never" | "disable" | "disabled" | "false" | "off" then :never
         else
           :auto
         end

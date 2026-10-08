@@ -307,6 +307,35 @@ end
     end
   end
 
+  # 本体と book.yml は OCR を切る値を disable と書く。以前は disable を知らず :auto にしていた
+  def test_should_accept_disable_as_ocr_off
+    %w[disable disabled never off].each do |value|
+      assert_equal(:never, VivlioStarter::Pdf::Reader.new(SAMPLE_PDF, ocr: { mode: value }).send(:ocr_mode), value)
+    end
+  end
+
+  # 資源に無い色空間（dvipdfmx の `/CS0 cs`）のような 1 つの命令の失敗で、ページの読み取りを止めない。
+  # 以前はページの画像の位置も捨て、OCR を切っても画像が 0 枚になった（切らなければ全ページを OCR した）
+  def test_should_keep_images_on_page_with_broken_operator
+    skip "ImageMagick が無い" unless imagemagick_available?
+
+    Dir.mktmpdir do |dir|
+      png = File.join(dir, "figure.png")
+      system("magick", "-size", "120x80", "xc:steelblue", png)
+      pdf = File.join(dir, "broken.pdf")
+      document = HexaPDF::Document.new
+      page = document.pages.add([0, 0, 595, 842])
+      page.canvas.image(png, at: [100, 500], width: 240)
+      page.contents = "/CS0 cs 0 0 0 sc\n#{page.contents}"
+      document.write(pdf)
+      reader = VivlioStarter::Pdf::Reader.new(pdf, images_dir: File.join(dir, "images"), ocr: { mode: "disable" })
+
+      result = reader.stub(:run_tesseract, ->(*) { flunk "OCR を切ったのに Tesseract を呼んだ" }) { reader.execute }
+
+      assert_equal(["page-001-image-01.webp"], result[:images].map { it[:filename] })
+    end
+  end
+
   # ocr_image_occurrences が埋め込み画像がない場合に vips を使用することを検証する
   def test_ocr_image_occurrences_uses_vips_when_embedded_images_are_absent
     reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
