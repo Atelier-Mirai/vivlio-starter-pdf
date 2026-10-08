@@ -691,6 +691,81 @@ end
     end
   end
 
+  # 行の並びが最も鋭く出る角度を傾きとする。読み取りは傾いたままの画像で済ませ、語の位置だけを回す。
+  # 傾いた行を囲んだ行の枠は、傾きのぶん高く出ているので縮める。図を切り出す画像は、回して大きさを保つ
+  def test_should_measure_skew_and_straighten_scan
+    skip "Vips is not available" unless vips_available?
+
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
+    vips = reader.send(:require_vips!)
+    lines = (0...40).map { |row| (vips::Image.black(1000, 12) + 255).embed(120, 100 + (row * 36), 1240, 1754) }.reduce(:|)
+    page = (lines > 0).ifthenelse(30, 230).cast(:uchar)
+    tilted = page.similarity(angle: 1.0, background: [230]).then { it.crop((it.width - 1240) / 2, (it.height - 1754) / 2, 1240, 1754) }
+
+    assert_in_delta(-1.0, reader.send(:skew_angle, tilted), 0.1)
+    assert_in_delta(0.0, reader.send(:skew_angle, page), 0.05)
+    # 1 本目の帯（中心 620, 106）は、1° 傾けた画像では中心 (633.5, 106) にあり、帯を囲む行の枠は 1000 × sin 1° だけ高い
+    tsv = [
+      %w[level page_num block_num par_num line_num word_num left top width height conf text],
+      %w[1 1 0 0 0 0 0 0 1240 1754 -1],
+      %w[4 1 1 1 1 0 134 91 1000 30 -1],
+      %w[5 1 1 1 1 1 584 100 100 12 95 帯]
+    ].map { it.join("\t") }.join("\n")
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "page.png")
+      tilted.write_to_file(path)
+      straightened, rotated = reader.send(:straighten, path, tsv, dir)
+      line, word = reader.send(:parse_tsv_rows, rotated).reject { it.level == "1" }
+
+      assert_equal([1240, 1754], vips::Image.new_from_file(straightened).then { [it.width, it.height] })
+      assert_in_delta(0.0, reader.send(:skew_angle, vips::Image.new_from_file(straightened)), 0.1)
+      assert_in_delta(570, word.left, 1)
+      assert_in_delta(100, word.top, 1)
+      assert_in_delta(12.5, line.height, 1)
+    end
+  end
+
+  # 確信度の低い行は傾きを戻して読み直し、和文が確信度高く読めたときだけ置き換える。位置は、切り出した
+  # 所と傾きを戻したずれを引いてページの画素へ戻す。英字の行（コード）と、傾けずに切り出しても同じように
+  # 読める行（和文の文字列を含むコードの行）は置き換えない
+  def test_should_reread_slanted_line_with_unslanted_reading
+    skip "Vips is not available" unless vips_available?
+
+    reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF, ocr: { "languages" => %w[jpn eng] })
+    header = %w[level page_num block_num par_num line_num word_num left top width height conf text]
+    page_tsv = [
+      header,
+      %w[4 1 1 1 1 0 400 1000 1200 60 -1],
+      %w[5 1 1 1 1 1 400 1000 500 60 4 BROKE],
+      %w[5 1 1 1 1 2 1000 1000 600 60 10 DIED,PREVI],
+      %w[4 1 2 1 1 0 400 1200 1200 60 -1],
+      %w[5 1 2 1 1 1 400 1200 1200 60 96 本文の行です。]
+    ].map { it.join("\t") }.join("\n")
+    line_tsv = [
+      header,
+      %w[1 1 0 0 0 0 0 0 1340 100 -1],
+      %w[4 1 1 1 1 0 70 20 1180 60 -1],
+      %w[5 1 1 1 1 1 70 20 1180 60 95 「現代の教育方法が、探究という」]
+    ].map { it.join("\t") }.join("\n")
+    code_tsv = line_tsv.sub("「現代の教育方法が、探究という」", "x+=delta*Math.cos(angle)")
+    upright_tsv = line_tsv.sub("\t95\t", "\t30\t")
+    # 傾けずに切り出した読み（-upright）と、傾きを戻した読みを返し分ける
+    tesseract = ->(slanted, upright) { ->(image, *, **) { ["", image.include?("upright") ? upright : slanted] } }
+
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "page.png")
+      reader.send(:require_vips!)::Image.black(2480, 3508).invert.write_to_file(path)
+      merged = reader.stub(:run_tesseract, tesseract.(line_tsv, upright_tsv)) { reader.send(:reread_slanted_lines, path, dir, page_tsv) }
+      words = reader.send(:parse_tsv_rows, merged).select { it.level == "5" }
+
+      assert_equal(%w[本文の行です。 「現代の教育方法が、探究という」], words.map(&:text))
+      # 切り出しの左上 (340, 980) に、語の位置 (70, 20) から傾きを戻したずれ（tan 12° × 行の中ほど 50px ≈ 11px）を引いて足す
+      assert_equal([399.0, 1000.0], [words.last.left, words.last.top])
+      assert_equal(page_tsv, reader.stub(:run_tesseract, tesseract.(code_tsv, upright_tsv)) { reader.send(:reread_slanted_lines, path, dir, page_tsv) })
+      assert_equal(page_tsv, reader.stub(:run_tesseract, tesseract.(line_tsv, line_tsv)) { reader.send(:reread_slanted_lines, path, dir, page_tsv) })
+    end
+  end
+
   private
 
   # ImageMagick（magick または convert）が PATH 上で利用可能かを確認する

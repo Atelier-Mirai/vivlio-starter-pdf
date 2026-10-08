@@ -86,6 +86,23 @@ module VivlioStarter
       # 97 章では 20〜30px の間でも F 値が 0.2 ポイント上下した
       REREAD_PADDING = 24 / 2480.0
 
+      # --- 傾きの補正（pdf-read-ocr-improvement-notes.md §4.14） ---
+      # 測る傾きの範囲と刻み（度）。スキャナに置いた紙は少し傾く（97 章のスキャンで、表と裏が交互に ±0.5〜1.1°）
+      DESKEW_RANGE = 3.0
+      DESKEW_STEP = 0.05
+      # これより小さい傾きは直さない
+      DESKEW_MIN_ANGLE = 0.1
+      # 傾きを測る画像の幅（px）。縮めて測っても 0.05° の刻みで決まる
+      DESKEW_WORK_WIDTH = 620
+
+      # --- 斜体の行の読み直し（pdf-read-ocr-improvement-notes.md §4.15） ---
+      # 読み直す行の確信度の平均の上限。斜体の行は 0〜40 の意味の無い英字になるか、60〜70 の崩れた和文になる
+      SLANT_MAX_CONFIDENCE = 75
+      # 読み直す行の字数の下限（図の中の短い札を除く）
+      SLANT_MIN_CHARACTERS = 8
+      # 戻す傾き（度）。Chrome は斜体の無い和文の書体を傾けて描く。97 章では 10〜14° のどれでも読め、12° が最もよかった
+      SLANT_ANGLE = 12
+
       # --- 英語での読み直し（pdf-read-ocr-improvement-notes.md §4.6） ---
       # 英字の語がこれ以上あるページだけ、英語の学習データでも読む。97 章のスキャンでは 24 ページ中
       # 6〜8 ページ（コードのあるページ）が当たり、10〜30 のどこに置いても成績は変わらなかった
@@ -592,7 +609,9 @@ module VivlioStarter
         text, tsv = run_tesseract(source_image_path, File.join(temp_dir, "ocr"))
         text, tsv, read_image_path = second_reading(source_image_path, temp_dir, text, tsv)
         tsv = reread_skipped_regions(read_image_path, temp_dir, tsv, page)
+        tsv = reread_slanted_lines(read_image_path, temp_dir, tsv)
         tsv = english_reading(read_image_path, temp_dir, tsv)
+        source_image_path, tsv = straighten(source_image_path, tsv, temp_dir)
 
         OcrResult.new(
           text:,
@@ -664,6 +683,64 @@ module VivlioStarter
         upscaled = File.join(temp_dir, "page-upscaled.png")
         image.write_to_file(upscaled)
         [upscaled, image.width, image.height]
+      end
+
+      # スキャンの傾きを直す（pdf-read-ocr-improvement-notes.md §4.14）。傾いたままだと、切り出した図の縁に
+      # 三角の余白が付き、コードの行番号の欄や柱の高さがページの上と下で数 pt ずれる。
+      # 読み取りは傾いたままの画像で済ませ、ここでは語の位置だけを回す。回した画像を Tesseract に読ませると、
+      # 補間で字がにじんで読みが落ちる（97 章の 1 ページで確信度の高い字が 612 → 525、全体で英字の語が
+      # 212 → 184）。Tesseract は傾いた行もそのまま読める。回した画像は図を見つけて切り出すのに使う。
+      # 大きさは変えない（OCR の座標を、画像がページを覆う前提でページの座標へ換算するため）。
+      # 回して空いた隅は紙の明るさで埋める
+      # @return [Array(String, String)] [図を切り出す画像のパス, 語の位置を回した TSV]
+      def straighten(path, tsv, temp_dir)
+        return [path, tsv] unless vips_available?
+
+        image = require_vips!::Image.new_from_file(path)
+        gray = image.colourspace(:b_w).extract_band(0)
+        angle = skew_angle(gray)
+        return [path, tsv] if angle.abs < DESKEW_MIN_ANGLE
+
+        rotated = image.similarity(angle:, background: Array.new(image.bands, gray.percent(50)))
+        deskewed = File.join(temp_dir, "page-deskewed.jpg")
+        rotated.crop((rotated.width - image.width) / 2, (rotated.height - image.height) / 2, image.width, image.height)
+               .write_to_file(deskewed, Q: 95)
+        [deskewed, rotate_tsv(tsv, angle, image.width, image.height)]
+      rescue StandardError
+        [path, tsv]
+      end
+
+      # TSV の枠を、画像を angle（度・時計回り）回したときの位置へ移す。枠の中心を画像の中心のまわりに回し、
+      # 大きさは保つ。ただし行・段落・ブロックの枠は、傾いた行を囲んだぶん（幅 × sin）だけ高く出ているので縮める
+      # （行の高さは字の大きさの見積もりになる）
+      def rotate_tsv(tsv, angle, width, height)
+        radians = angle * Math::PI / 180
+        cos = Math.cos(radians)
+        sin = Math.sin(radians)
+        rows = parse_tsv_rows(tsv).map do |row|
+          next row if row.level == "1"
+
+          dx = row.center_x - (width / 2.0)
+          dy = row.center_y - (height / 2.0)
+          box_height = row.level == "5" ? row.height : [row.height - (row.width * sin.abs), row.height / 4].max
+          x = (width / 2.0) + (dx * cos) - (dy * sin)
+          y = (height / 2.0) + (dx * sin) + (dy * cos)
+          row.with_fields("left" => (x - (row.width / 2)).round, "top" => (y - (box_height / 2)).round, "height" => box_height.round)
+        end
+        "#{[tsv.lines.first.chomp, *rows.map { it.fields.join("\t") }].join("\n")}\n"
+      end
+
+      # 傾き（度・時計回りに直す向きが正）。縮めた画像の濃い画素を角度ごとに回して行ごとに足し、行の並びが
+      # いちばん鋭く出る（行ごとの和の二乗和が最大の）角度を採る。範囲の端に当たったら、行の並びが
+      # 見つからない（絵だけのページなど）とみなして 0 を返す。97 章の 1 ページで 0.2 秒
+      def skew_angle(gray)
+        factor = [gray.width / DESKEW_WORK_WIDTH, 1].max
+        small = gray.shrink(factor, factor)
+        ink = (small < small.percent(50) - FIGURE_DARKNESS).ifthenelse(1.0, 0.0).copy_memory
+        best = (-DESKEW_RANGE..DESKEW_RANGE).step(DESKEW_STEP).max_by do |angle|
+          ink.similarity(angle:).project[1].to_a.flatten.sum { it * it }
+        end
+        best.abs >= DESKEW_RANGE - (DESKEW_STEP / 2) ? 0.0 : best
       end
 
       # そのまま OCR に回せる埋め込みの画像を返す（無ければ nil）。
@@ -849,6 +926,80 @@ module VivlioStarter
         confident = ->(words) { words.select { it.conf >= CONFIDENT_WORD }.sum { it.text.length } }
         confident.(region_words) >= 4 && confident.(region_words) * 2 >= region_words.sum { it.text.length } &&
           confident.(region_words) > confident.(inside)
+      end
+
+      # 斜体の行を、傾きを戻して読み直す（pdf-read-ocr-improvement-notes.md §4.15）。和文に斜体の書体は無く、
+      # Chrome は字を傾けて描く。Tesseract は傾いた和文を読めず、引用文が「BROKE DIED, PREVI…」になる
+      # （97 章の引用 9 か所・381 字）。確信度の低い行だけを切り出し、SLANT_ANGLE だけ逆に傾けて読む。
+      # 97 章では候補 57 行のうち、引用の 11 行が置き換わった
+      def reread_slanted_lines(image_path, temp_dir, tsv)
+        return tsv unless @ocr.languages.include?("jpn")
+
+        rows = parse_tsv_rows(tsv)
+        heights = rows.select { it.level == "4" }.map(&:height).sort
+        return tsv if heights.empty?
+
+        line_height = heights[heights.size / 2]
+        candidates = rows.select { it.level == "5" && !it.text.empty? }.group_by(&:line_key).values.select do |words|
+          words.size >= 2 && words.sum { it.text.length } >= SLANT_MIN_CHARACTERS && mean_confidence(words) < SLANT_MAX_CONFIDENCE &&
+            words.map(&:bottom).max - words.map(&:top).min <= line_height * 2.5
+        end
+        return tsv if candidates.empty?
+
+        image = require_vips!::Image.new_from_file(image_path)
+        replaced = []
+        added = []
+        candidates.each_with_index do |words, number|
+          reading = read_unslanted(image, words, temp_dir, number.to_s, SLANT_ANGLE, 100_000 * (number + 1))
+          next unless better_unslanted?(reading, words)
+          next unless better_unslanted?(reading, read_unslanted(image, words, temp_dir, "#{number}-upright", 0, 0))
+
+          replaced.concat(words)
+          added.concat(reading)
+        end
+        return tsv if added.empty?
+
+        "#{[tsv.lines.first.chomp, *(rows - replaced).map { it.fields.join("\t") }, *added.map { it.fields.join("\t") }].join("\n")}\n"
+      rescue StandardError
+        tsv
+      end
+
+      # 行を余白つきで切り出し、angle（度）だけ傾きを戻して読む。返す行（TSV の行と語）の位置はページの画素へ戻す。
+      # 傾きを戻すと字は行の高さに応じて右へずれるので、行の中ほどのずれを引く。ブロックの番号は block_offset だけ
+      # ずらす（読み飛ばした範囲の読み直しの 1000 単位と重ならないよう、100000 単位にする）
+      def read_unslanted(image, words, temp_dir, name, angle, block_offset)
+        top = words.map(&:top).min
+        height = words.map(&:bottom).max - top
+        left = [words.map(&:left).min.floor - height.ceil, 0].max
+        crop_top = [top.floor - (height / 3).ceil, 0].max
+        right = [words.map(&:right).max.ceil + height.ceil, image.width].min
+        bottom = [(top + height).ceil + (height / 3).ceil, image.height].min
+        shear = Math.tan(angle * Math::PI / 180)
+        crop = image.crop(left, crop_top, right - left, bottom - crop_top)
+        paper = crop.colourspace(:b_w).extract_band(0).percent(50)
+        path = File.join(temp_dir, "slant-#{name}.png")
+        crop.affine([1, shear, 0, 1], background: Array.new(crop.bands, paper)).write_to_file(path)
+
+        _text, line_tsv = run_tesseract(path, File.join(temp_dir, "slant-#{name}"))
+        parse_tsv_rows(line_tsv).select { %w[4 5].include?(it.level) }.map do |row|
+          row.with_fields("left" => (row.left - (shear * row.center_y) + left).round, "top" => row.top.round + crop_top,
+                          "block_num" => row["block_num"].to_i + block_offset)
+        end
+      end
+
+      # 傾きを戻した読みを採るか。確信度の高い字が 4 字以上、半分以上が和文で、比べる読み（もとの読みと、同じ所を
+      # 傾けずに切り出した読み）より確信度の高い字が十分に多いこと。読めた字の半分以上が確信度の高い字であるか、
+      # 20 字以上あること（引用の行の後ろに崩れた字が続くことがある）。傾けずに切り出した読みとも比べるのは、
+      # 切り出すだけでよく読める行（和文の文字列を含むコードの行）を、崩れた読みで置き換えないため
+      def better_unslanted?(reading, words)
+        read = reading.select { it.level == "5" && !it.text.empty? }
+        confident = ->(list) { list.select { it.level == "5" && it.conf >= CONFIDENT_WORD }.sum { it.text.length } }
+        total = read.sum { it.text.length }
+        gained = confident.(read)
+        original = confident.(words)
+        japanese = read.sum { |word| word.text.each_char.count { !it.ascii_only? } }
+        gained >= 4 && japanese * 2 >= total && gained > original + [4, original * 0.3].max &&
+          (gained * 2 >= total || gained >= 20)
       end
 
       # 英字の多いページだけ、英語の学習データでも読み、英字の語を語の位置で突き合わせて採る
