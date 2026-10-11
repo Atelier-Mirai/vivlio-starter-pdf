@@ -336,9 +336,11 @@ module VivlioStarter
       # @param images_dir [String, nil] 画像の保存先ディレクトリ
       # @param image_reference_dir [String, nil] Markdown 内の画像参照パスの基底
       # @param ocr [Hash, nil] OCR 設定
-      # @param progress [#call, nil] OCR するページごとに (ページ番号, ページ数) で呼ぶ。OCR は 1 ページ数秒かかる
+      # @param progress [#call, nil] OCR するページごとに (何ページ目か, 読むページの数) で呼ぶ。OCR は 1 ページ数秒かかる
+      # @param pages [Array<Integer>, nil] 読むページ（1 から数える）。省けば全ページ。読まないページは、文字も画像も OCR も
+      #   取らず、結果の配列には空の値を置く（ページの添字をそろえたまま、vs pdf:read --pages の OCR の時間を省く）
       def initialize(pdf_path, page_separator: true, text_area: nil, line_merge_tolerance: 2.0, images_dir: nil, image_reference_dir: nil, ocr: nil,
-                     progress: nil)
+                     progress: nil, pages: nil)
         @pdf_path = pdf_path
         @page_separator = page_separator != false
         @text_area = normalize_text_area(text_area)
@@ -347,6 +349,7 @@ module VivlioStarter
         @image_reference_dir = image_reference_dir&.to_s&.strip
         @ocr = normalize_ocr(ocr)
         @progress = progress
+        @pages = pages&.map(&:to_i)
       end
 
       # PDF を解析し、Markdown テキスト・画像アセット・メタデータを含む Hash を返す
@@ -360,9 +363,16 @@ module VivlioStarter
         page_words = []
         page_sizes = []
 
-        @page_count = document.pages.count
+        @page_count = @pages ? @pages.size : document.pages.count
         document.pages.each_with_index do |page, index|
           resolution = nil
+          unless read_page?(index)
+            page_texts << ""
+            page_chunks << ""
+            page_words << nil
+            page_sizes << page_size(page)
+            next
+          end
 
           begin
             content = extract_page_content(page, index)
@@ -398,6 +408,8 @@ module VivlioStarter
 
       attr_reader :pdf_path
 
+      def read_page?(index) = @pages.nil? || @pages.include?(index + 1)
+
       # OCR 用の一時ディレクトリを安全に削除する
       def cleanup_ocr_temp_dir(path)
         return if path.to_s.empty?
@@ -426,7 +438,7 @@ module VivlioStarter
       def resolve_page_content(page, index, content)
         return ResolvedPage.new(content:, ocr_applied: false, ocr_temp_dir: nil) unless ocr_required_for_page?(page, content)
 
-        @progress&.call(index + 1, @page_count)
+        @progress&.call(@pages ? @pages.index(index + 1).to_i + 1 : index + 1, @page_count)
         resolved_content, ocr_temp_dir = extract_page_ocr_content(page, index, content.image_occurrences)
         ResolvedPage.new(content: resolved_content, ocr_applied: true, ocr_temp_dir:)
       rescue StandardError

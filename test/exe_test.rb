@@ -35,7 +35,8 @@ class ExeTest < Minitest::Test
         "line_merge_tolerance=2.0",
         "images_dir=#{dir}",
         "image_reference_dir=",
-        'ocr={"mode":"disable","languages":["jpn"]}'
+        'ocr={"mode":"disable","languages":["jpn"]}',
+        "pages=[1,2]"
       )
 
       assert(status.success?, stderr)

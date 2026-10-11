@@ -632,6 +632,36 @@ end
     assert_equal([[5, 24]], calls)
   end
 
+# pages で読むページを絞る。読まないページは文字も画像も取らず、空の値を置いてページの添字をそろえる
+# （vs pdf:read --pages。pdf-read-file-naming-spec.md §10）
+def test_should_read_only_the_given_pages
+  Dir.mktmpdir do |dir|
+    result = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF, images_dir: dir, image_reference_dir: "", pages: [2]).execute
+
+    assert_equal(2, result[:pages])
+    assert_equal(["", 2], [result[:page_texts].first, result[:page_texts].size])
+    refute_empty(result[:page_texts].last)
+    assert_equal([nil], result[:page_words].first(1))
+    assert(result[:images].all? { it[:page] == 2 })
+  end
+end
+
+# 絞ったときの経過は、読むページのうちの何ページ目かで知らせる
+def test_should_report_progress_within_the_given_pages
+  calls = []
+  reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF, progress: ->(page, total) { calls << [page, total] }, pages: [31, 32, 52])
+  reader.instance_variable_set(:@page_count, 3)
+  content = VivlioStarter::Pdf::Reader::PageContent.new(text: "", lines: [], image_occurrences: [])
+
+  reader.stub :ocr_required_for_page?, ->(_page, _content) { true } do
+    reader.stub :extract_page_ocr_content, [content, nil] do
+      reader.send(:resolve_page_content, nil, 51, content)
+    end
+  end
+
+  assert_equal([[3, 3]], calls)
+end
+
   # スキャンの解像度はページの幅から見積もり、400dpi を超えれば 300dpi へ縮めて読む。
   # 600dpi のまま読むと、字が大きすぎて読み違える（97 章で F 値 89.3% → 縮めて 90.6%）
   def test_should_downscale_scan_above_400dpi

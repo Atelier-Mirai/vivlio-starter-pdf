@@ -20,7 +20,8 @@ module VivlioStarter
         'images_dir' => ->(value) { value },
         'image_reference_dir' => ->(value) { value },
         'ocr' => ->(value) { JSON.parse(value) },
-        'progress' => ->(value) { value == 'true' }
+        'progress' => ->(value) { value == 'true' },
+        'pages' => ->(value) { JSON.parse(value) }
       }.freeze
 
       def self.run(args = [])
