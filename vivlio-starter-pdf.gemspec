@@ -19,6 +19,9 @@ Gem::Specification.new do |spec|
   spec.metadata["allowed_push_host"] = "https://rubygems.org"
   spec.metadata["source_code_uri"] = "https://github.com/Atelier-Mirai/vivlio-starter-pdf"
   spec.metadata["changelog_uri"] = "https://github.com/Atelier-Mirai/vivlio-starter-pdf/blob/master/CHANGELOG.md"
+  # push・yank ごとのワンタイムコードは求めない。API キーを push・yank だけに絞って
+  # 乗っ取りを防ぐ（本体の release-1.0-considerations.md §A-3。本体・query-stream と同じ）
+  spec.metadata["rubygems_mfa_required"] = "false"
   spec.post_install_message = <<~MESSAGE
     [vivlio-starter-pdf]
     Enhanced Mode の OCR には外部ツール（tesseract / tesseract-lang / poppler / vips）が必要です。

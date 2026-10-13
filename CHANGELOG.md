@@ -35,10 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   本体が `Pdf.provider` に委ねるのは `page_count` / `ensure_blank_page_pdf` / `add_outline!` の 3 つだけである。ノンブルを戻す予定は無い。プラグインの有無で成果物が変わらないほうがよい種類の処理で、CombinePDF が named destinations を再構築しない問題もそれで解消している。公開 API が 1 つ減るので SemVer なら major だが、**1.2.0 とした**。呼び出しうるのは本体 `vivlio-starter` だけで、その本体はすでに呼んでいない。本体が 1.0.0 を迎えるのに合わせて配るため、プラグインだけが 2.0.0 になる並びを避けた。
 
 ### Fixed
+- **OCR の誤認識補正が 2026-08-04 から一度も効いていなかったのを直した** (`reader.rb`): 補正表の読み込み先が `config/textlint_prh.yml` と決め打ちで、本体側の `6bbc2007`「校正まわりの設定ファイル名を対にする」でこのファイルが `textlint_rewrite.yml` へ改名された際に取り残されていた。`File.file?` が false を返すので例外も警告も出ず、**空の表を当てて素通りする**——気付けない形で壊れていた。`vs pdf:read` の統合テストが「ログラミング技術習得の三要素」（先頭の「プ」が落ちたまま）を期待していたのが、動いていなかった証拠である。
 - **HexaPDF が書けない画像を pdfimages で書き出し、白地の多い絵の枠を削りすぎないようにした** (`reader.rb` の `write_extracted_image`・`poppler_page_images`・`bridge_sparse`・`pdf-read-ocr-improvement-notes.md` §4.20): HexaPDF は色の表（Indexed）を別のオブジェクトに置いた画像の情報を読めずに例外を出し、`fundamentals-of-system-design.pdf` の回路図などが 103 個中 9 個しか取れなかった。書けない画像は `pdfimages` でページの画像を書き出し、`-list` のオブジェクトの番号で選ぶ（103 個すべて取れる）。また、図の枠を埋まった行の連なりへ削るとき、区画の境目にはさまる少しだけ埋まった行（1 割以上・8 本以内）で切っていたので、白地の多い絵や表紙の一部しか切り出せなかった。そうした行は続きとみなす（97 章の光格子時計の絵と『量子力学』の表紙が全体で取れる。ほかの図は変わらない）。
 - **OCR を切る値 `disable` を受け付けるようにし、読めない命令のあるページでも読み続けるようにした** (`reader.rb` の `normalize_ocr_mode`・`PageTextCollector#process`・`pdf-read-ocr-improvement-notes.md` §4.19): 本体と `book.yml` は OCR を切る値を `disable` と書くが、`never`・`false`・`off` しか知らず `auto` にしていた（最初のコミットから）。また、資源に無い色空間（dvipdfmx の `/CS0 cs`）や縦書きの字で HexaPDF が例外を出すと、ページの文字と画像の位置を丸ごと捨てていた。2 つが重なり、文字の層のある PDF の全ページを OCR して、探究 Rust プログラミング（392 頁）・データ解析に強くなる Rust レシピ（313 頁）が 15 分を超えても終わらなかった。`disable`・`disabled` を `:never` にし、失敗した命令だけを飛ばす。2 冊は 5.7 秒・7.1 秒で終わり、画像は 3 枚・38 枚取れる。
 - **文字を 1 字ずつ描く PDF で、各行が「全文＋先頭の 1 字を欠いた全文」に二重化していた** (`reader.rb` の `PageTextCollector#build_lines`): 行の組み立てが `buffer = +fragment.text` で始まっていた。`+` は凍結されていない文字列を複製せずに返すので、続く `<<` が先頭の断片の文字列そのものを行全体へ書き換える。`extract_page_content` は `text` と `lines` で組み立てを 2 回呼ぶため、2 回目の各行が膨らんでいた。Chrome（Vivliostyle）の PDF は字ごとに断片を描くので、`vs build` の PDF では全行がこうなる。最初のコミットからあった。Prawn で作る fixture は 1 行を 1 断片で描くため、通し経路のテストでは表に出なかった。複製して受けるようにし、複数断片の行を 2 回組み立てるテストを足した。
-- **統合テストが、どの環境でも一度も走っていなかった** (`test/reader_test.rb`): fixture が隣の repo（`../vivlio-starter/sources/*.pdf`）を指していたが、その PDF は**どこにも存在しなかった**。`File.exist?` が false を返して skip するだけなので赤くならず、**この gem の中核である `reader.rb`（1,262 行）の通し経路は未検証のまま**だった。1.1.3 で直した OCR 補正の不具合も、それを捕まえるはずのテストが止まっていた。
+- **統合テストが、どの環境でも一度も走っていなかった** (`test/reader_test.rb`): fixture が隣の repo（`../vivlio-starter/sources/*.pdf`）を指していたが、その PDF は**どこにも存在しなかった**。`File.exist?` が false を返して skip するだけなので赤くならず、**この gem の中核である `reader.rb`（1,262 行）の通し経路は未検証のまま**だった。この版で直した OCR 補正の不具合（補正表の読み込み先）も、それを捕まえるはずのテストが止まっていた。
 
   fixture を `test/fixtures/` へ同梱し、組み立て手順を `build_fixtures.rb` に残した。読む側が HexaPDF なので、作る側は Prawn にしてある——同じ実装で作って読むと、その実装の癖が打ち消し合って検証から外れる。OCR 用には文字レイヤーを持たない PDF（`scanned.pdf`）を焼いた。テストは **34 runs / 2 skips → 37 runs / 0 skips** になった。
 
@@ -52,20 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **対応 Ruby を 3.4.10 / 4.0.7 にした**。4.0.7 は 2026-09-15 公開。
 - **依存を最新へ上げた**: HexaPDF 1.6.0 → 1.10.0、Minitest → 6.0.6、minitest-reporters 1.7.1 → 1.8.0。
 - **rubocop を入れた**（`.rubocop.yml`・`rake rubocop`・CI）。見るのは `Lint` と `Security` だけで、引用符や行数は見ない。読みやすさを削ってまで様式に従うものではなく、本体 `vivlio-starter` も同じ構えを採っている。現状 0 件。
-- **README を実装に合わせた**: 機能表から隠しノンブルを外し、OCR 補正の出どころを `config/ocr_corrections.yml` と明記した（1.1.3 で prh 辞書から移したのに README が追随していなかった）。
-
-## [1.1.3] - 2026-09-18 (未公開)
-
-> rubygems へは出していない。ここに書いた修正は 1.2.0 に含めて配る。利用者から見た更新は 1.1.2 → 1.2.0 になるため、リリースノートでは 1.2.0 の節でまとめて説明している。
-
-### Fixed
-- **OCR の誤認識補正が 2026-08-04 から一度も効いていなかったのを直した** (`reader.rb`): 補正表の読み込み先が `config/textlint_prh.yml` と決め打ちで、本体側の `6bbc2007`「校正まわりの設定ファイル名を対にする」でこのファイルが `textlint_rewrite.yml` へ改名された際に取り残されていた。`File.file?` が false を返すので例外も警告も出ず、**空の表を当てて素通りする**——気付けない形で壊れていた。`vs pdf:read` の統合テストが「ログラミング技術習得の三要素」（先頭の「プ」が落ちたまま）を期待していたのが、動いていなかった証拠である。
-
-### Changed
 - **OCR の補正表を、校正辞書から独立した `config/ocr_corrections.yml` へ移した** (`reader.rb`): 走査の誤りと表記の方針は別物である。校正辞書に置くと**全原稿**に当たるため、本体側で実測すると `Al => AI`（OCR が AI をエルの小文字と読み違える補正）がアルミニウムの元素記号と人名 Al Gore を書き換え、`語芸 => 語彙` が「言語芸術」を「言語彙術」にしていた。しかも prh 由来の指摘は自動修正を持つので、`vs lint --fix` が黙って壊す。補正表を分ければ**当たるのは OCR したページのテキストだけ**になる。
   - 書式は従来どおり（`expected` ＋ `patterns`、`/…/` で正規表現）。読み取る本ごとに癖が違うので、著者が育てられるよう YAML のままにしてある。
   - `Al => AI` は既定に入れない。`Al` が AI なのかアルミニウムなのかは文脈でしか決まらず、機械に任せる項目ではない（雛形にコメントで残し、必要な本だけ有効にできるようにした）。
   - 補正表が無いプロジェクト（1.0 より前の雛形）では、従来どおり補正せずに素通りする。
+- **README を実装に合わせた**: 機能表から隠しノンブルを外し、OCR 補正の出どころを `config/ocr_corrections.yml` と明記した（補正表を prh 辞書から移したのに README が追随していなかった）。
 
 ## [1.1.2] - 2026-08-07
 
