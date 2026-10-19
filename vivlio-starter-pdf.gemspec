@@ -22,15 +22,6 @@ Gem::Specification.new do |spec|
   # push・yank ごとのワンタイムコードは求めない。API キーを push・yank だけに絞って
   # 乗っ取りを防ぐ（本体の release-1.0-considerations.md §A-3。本体・query-stream と同じ）
   spec.metadata["rubygems_mfa_required"] = "false"
-  spec.post_install_message = <<~MESSAGE
-    [vivlio-starter-pdf]
-    Enhanced Mode の OCR には外部ツール（tesseract / tesseract-lang / poppler / vips）が必要です。
-      vs doctor --fix
-    で本体側からまとめて導入できます（macOS / Homebrew）。
-    手動の場合: brew install tesseract tesseract-lang poppler vips
-
-    すでに導入済みの場合はこのメッセージを無視して構いません。
-  MESSAGE
 
   # Specify which files should be added to the gem when it is released.
   spec.files = Dir.chdir(__dir__) do

@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **実行ファイルに `read` サブコマンドを足した** (`exe/vivlio-starter-pdf`): `vivlio-starter-pdf read PDF key=value …` で PDF を読み、`Reader#execute` の結果を JSON で標準出力へ書く。本体の `vs pdf:read` は Enhanced Mode でこの形を呼んでいたが、**実行ファイルは `--version` と `--help` しか知らず**、`Unknown option 'read'` で終わっていた。git 履歴を通して `read` は一度も無く、**Enhanced Mode は `vs` から一度も動いていなかった**（本体のテストは呼び出しをスタブしていた）。設定は本体が渡す 6 つ（`page_separator`・`text_area`・`line_merge_tolerance`・`images_dir`・`image_reference_dir`・`ocr`）を受け、知らないキーは黙って捨てずに止める。標準出力は JSON だけにし、誤りは標準エラーへ出す。実行ファイルを子プロセスで起動するテスト（`test/exe_test.rb`）を足した。
 
 ### Removed
+- **インストールの後の案内（`post_install_message`）を外した** (`vivlio-starter-pdf.gemspec`): OCR に要る外部ツール（tesseract・tesseract-lang・poppler・vips）と `vs doctor --fix` を案内していた。本体の導入スクリプト（`bin/install.zsh`）がこの gem を一緒に入れるようになり、ツールも同じ導入の中の `vs doctor --fix` が入れる。導入の途中に「必要です」と出ても、著者にはすることが無い。別に入れた人にも、本体の `vs doctor --fix`（`vs new` の最後にも走る）が OCR のツールを入れる。
 - **隠しノンブルの書き込み（`stamp_nombre!`）を削除した** (`enhanced_provider.rb`): 本体はすでに Prawn ＋ `qpdf --overlay` の MIT 共通実装へ移しており、**プラグインのこのメソッドはどこからも呼ばれていなかった**。139 行のうち 92 行が到達不能なまま残り、テスト 2 件がそれを検証して緑を出していた——動かない機能を確かめる緑は、あるほうが害になる。
 
   本体が `Pdf.provider` に委ねるのは `page_count` / `ensure_blank_page_pdf` / `add_outline!` の 3 つだけである。ノンブルを戻す予定は無い。プラグインの有無で成果物が変わらないほうがよい種類の処理で、CombinePDF が named destinations を再構築しない問題もそれで解消している。公開 API が 1 つ減るので SemVer なら major だが、**1.2.0 とした**。呼び出しうるのは本体 `vivlio-starter` だけで、その本体はすでに呼んでいない。本体が 1.0.0 を迎えるのに合わせて配るため、プラグインだけが 2.0.0 になる並びを避けた。
