@@ -10,7 +10,7 @@ RuboCop::RakeTask.new(:rubocop)
 # gemspec が Ruby 3.4 以上を謳う以上、それが本当かは実際に走らせないと分からない。
 # `it`（暗黙ブロック引数）は 3.3 以下でも構文エラーにならず「it というメソッドの
 # 呼び出し」として通り、実行時に NameError になる——静的解析では捕まらない。
-SUPPORTED_RUBY_VERSIONS = %w[3.4.10 4.0.7].freeze
+SUPPORTED_RUBY_VERSIONS = %w[3.4.10 4.0.9].freeze
 
 # 別の Ruby を子プロセスで起動する以上、親の bundler 環境は必ず捨てる。
 # `bundle exec rake test` から呼ばれると、親（現在の Ruby）の bundler を

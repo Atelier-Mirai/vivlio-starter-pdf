@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **開発で試す Ruby を 3.4.10 / 4.0.9 にした**（`.ruby-version`・`rake test:versions`）。4.0.9 は 2026-10-23 公開。gem の中身は変わらない。
+
 ### Planned
 - パフォーマンス最適化（大規模 PDF 対応）
 - 追加 OCR エンジン対応
