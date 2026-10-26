@@ -17,7 +17,14 @@ module VivlioStarter
       end
 
       # Writes the given +items+ into the document outline.
-      # @param items [Array<Hash>] entries with :level, :text, :page
+      #
+      # An entry with +:top+ (the y coordinate of the heading, in PDF units) jumps to the
+      # heading itself instead of the top of its page, so readers do not have to look for
+      # a section that sits near the bottom of the page. Left and zoom stay +nil+ so the
+      # reader keeps their own horizontal position and magnification. Entries without
+      # +:top+ (chapters, whose opener shows art above the heading) still show the whole page.
+      #
+      # @param items [Array<Hash>] entries with :level, :text, :page, and optionally :top
       # @return [Integer] number of inserted outline nodes
       def write(items)
         return 0 if @page_count.zero?
@@ -31,7 +38,7 @@ module VivlioStarter
 
         normalized.each do |entry|
           parent = parent_for(entry[:level], stack)
-          destination = resolve_destination(entry[:page])
+          destination = resolve_destination(entry[:page], entry[:top])
           unless destination
             warn_skip("page #{entry[:page]} is outside 1-#{@page_count}")
             next
@@ -70,7 +77,15 @@ module VivlioStarter
         level = 1 if level < 1
         level = @max_level if level > @max_level
 
-        { text:, page:, level: }
+        { text:, page:, level:, top: entry_top(raw) }
+      end
+
+      # The heading position, or +nil+ to show the whole page. Anything that is not a
+      # finite number falls back to the page rather than dropping the entry: a bookmark
+      # that lands on the right page is still useful.
+      def entry_top(raw)
+        top = fetch(raw, :top, nil)
+        top.is_a?(Numeric) && top.to_f.finite? ? top.to_f : nil
       end
 
       # Returns the trimmed title, or +nil+ when the entry must be skipped.
@@ -118,14 +133,24 @@ module VivlioStarter
         stack.last[:node]
       end
 
-      # Resolves the destination page for an entry.
-      def resolve_destination(page_number)
+      # Resolves the destination for an entry: the heading position when +top+ lies on
+      # the page, otherwise the whole page (as before +:top+ existed).
+      def resolve_destination(page_number, top = nil)
         index = page_number.to_i - 1
         return nil unless index.between?(0, @page_count - 1)
 
-        @doc.pages[index]
+        page = @doc.pages[index]
+        return page unless top && on_page?(page, top)
+
+        { type: :xyz, page:, top: }
       rescue StandardError
         nil
+      end
+
+      # A +top+ outside the media box would scroll past the page, so it is not used.
+      def on_page?(page, top)
+        box = page.box(:media)
+        top.between?(box.bottom, box.top)
       end
 
       # Recreates an empty outline root before inserting new nodes.

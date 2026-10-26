@@ -55,6 +55,36 @@ module VivlioStarter
         assert(messages.any? { it.include?("page 99") })
       end
 
+      # :top のある項目は見出しの位置へ飛ぶ。左端と倍率は nil で、読者の横の位置と倍率を保つ
+      def test_write_jumps_to_the_heading_when_top_is_given
+        writer = OutlineWriter.new(@document, max_level: 3)
+        writer.write([{ level: 1, text: "Chapter", page: 1 }, { level: 2, text: "Section", page: 2, top: 512.25 }])
+
+        chapter = @document.catalog[:Outlines][:First]
+        section = chapter[:First]
+        assert_equal :Fit, chapter[:Dest][1], ":top の無い項目は今までどおりページ全体"
+        assert_equal [@document.pages[1], :XYZ, nil, 512.25, nil], section[:Dest].to_a
+        assert_equal @document.pages[1], section.destination_page
+      end
+
+      # ページの外を指す :top や数でない :top は使わず、ページへの飛び先に戻す（項目は落とさない）
+      def test_write_falls_back_to_the_page_for_unusable_top
+        writer = OutlineWriter.new(@document, max_level: 3)
+        count = writer.write([
+                               { level: 1, text: "Above", page: 1, top: 5000 },
+                               { level: 1, text: "Text", page: 2, top: "12" },
+                               { level: 1, text: "NaN", page: 3, top: Float::NAN }
+                             ])
+
+        assert_equal 3, count
+        item = @document.catalog[:Outlines][:First]
+        3.times do |i|
+          assert_equal :Fit, item[:Dest][1], "#{item[:Title]} はページ全体"
+          assert_equal @document.pages[i], item.destination_page
+          item = item[:Next]
+        end
+      end
+
       # write が既存のアウトラインルートを置き換えることを検証する
       def test_write_replaces_existing_outline_root
         writer = OutlineWriter.new(@document, max_level: 3)
