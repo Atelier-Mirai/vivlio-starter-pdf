@@ -8,26 +8,23 @@ Gem::Specification.new do |spec|
   spec.authors = ["Atelier Mirai"]
   spec.email = ["contact@atelier-mirai.net"]
 
-  spec.summary = "Advanced PDF processor for vivlio-starter using HexaPDF"
-  spec.description = "Provides PDF outline extraction, precision page numbering, and OCR via HexaPDF. AGPL-3.0 licensed."
+  spec.summary = "Vivlio Starter の PDF のしおり付与と、PDF から Markdown への変換を行う拡張プラグイン"
+  spec.description = "Vivlio Starter の Enhanced Mode を提供する拡張プラグインです。HexaPDF で PDF にしおりを付け、" \
+                     "PDF を Markdown へ変換します。スキャンした PDF は Tesseract で OCR し、画像は WebP で抽出します。" \
+                     "ライセンスは AGPL-3.0 です。"
   spec.homepage = "https://github.com/Atelier-Mirai/vivlio-starter-pdf"
   spec.license = "AGPL-3.0-only"
   spec.required_ruby_version = ">= 3.4.0"
 
-  # homepage_uri は spec.homepage から自動で作られる。metadata にも同じ URL を書くと
-  # rubygems.org はどちらか片方しか表示せず、gem build が警告を出す
   spec.metadata["allowed_push_host"] = "https://rubygems.org"
   spec.metadata["source_code_uri"] = "https://github.com/Atelier-Mirai/vivlio-starter-pdf"
   spec.metadata["changelog_uri"] = "https://github.com/Atelier-Mirai/vivlio-starter-pdf/blob/master/CHANGELOG.md"
-  # push・yank ごとのワンタイムコードは求めない。API キーを push・yank だけに絞って
-  # 乗っ取りを防ぐ（本体の release-1.0-considerations.md §A-3。本体・query-stream と同じ）
   spec.metadata["rubygems_mfa_required"] = "false"
 
-  # Specify which files should be added to the gem when it is released.
   spec.files = Dir.chdir(__dir__) do
     tracked = `git ls-files -z`.split("\x0").reject do |f|
       (File.expand_path(f) == __FILE__) ||
-        f.start_with?(*%w[bin/ test/ spec/ features/ .git appveyor Gemfile])
+        f.start_with?(*%w[bin/ test/ spec/ features/ .git .rubocop.yml .ruby-version appveyor Gemfile Rakefile])
     end
     source_files = Dir.glob("lib/**/*.rb")
     executables = Dir.glob("exe/*")
@@ -40,16 +37,10 @@ Gem::Specification.new do |spec|
   spec.add_dependency "hexapdf", "~> 1.0"
   spec.add_dependency "ruby-vips", "~> 2.2"
 
-  # Development dependencies
   spec.add_development_dependency "minitest", ">= 5.20"
-  # Minitest 6 は minitest/mock を本体から外し、この gem へ分離した
-  # （History.rdoc: "Dropped minitest/mock.rb. This has been extracted to the minitest-mock gem."）。
-  # 5 では autorun がついでに読んでいたので、書かなくても Object#stub が使えていた
   spec.add_development_dependency "minitest-mock", "~> 5.27"
   spec.add_development_dependency "minitest-reporters", "~> 1.7"
   spec.add_development_dependency "rake", "~> 13.1"
-  # fixture の PDF を組み立てるのに使う（HexaPDF で作って HexaPDF で読むと
-  # 同じ実装の癖を検証から外せないため、生成側は別のライブラリにする）
   spec.add_development_dependency "prawn", "~> 2.5"
   spec.add_development_dependency "rubocop", "~> 1.81"
 end

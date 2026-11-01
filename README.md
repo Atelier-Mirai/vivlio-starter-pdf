@@ -13,27 +13,22 @@ vivlio-starter 本体（MIT）が提供する Standard Mode を拡張し、以�
 | --- | --- |
 | **PDF → Markdown 変換** | HexaPDF でテキスト・画像を高精度に抽出し、Markdown に変換 |
 | **画像抽出（WebP 化）** | PDF 内の XObject を解析し、WebP 形式で書き出し |
-| **OCR 連携** | スキャン PDF を自動検出し、Tesseract で日本語 OCR を実行 |
+| **OCR 連携** | スキャン PDF を自動検出し、Tesseract で OCR を実行（既定は日本語と英語） |
 | **OCR テキスト補正** | 日本語空白圧縮、括弧正規化、`config/ocr_corrections.yml` による誤読修正 |
-| **PDF アウトライン** | HTML 見出しを解析し、PDF のブックマークツリーを構築 |
+| **PDF アウトライン** | 本体から渡された見出しの一覧をもとに、PDF のブックマークツリーを構築 |
 
 ## インストール
 
-### gem としてインストール
+本体の導入スクリプトで Vivlio Starter をインストールした場合は、この gem と外部ツールも同時にインストールされています。追加の操作は必要ありません。
+
+それ以外の方法で本体をインストールした場合は、次のコマンドを実行します。
 
 ```zsh
 gem install vivlio-starter-pdf
+vs doctor --fix
 ```
 
-インストール完了時に、OCR 機能を利用するために必要な外部ツールも案内されます。
-
-### 外部ツール（OCR 利用時）
-
-```zsh
-brew install tesseract tesseract-lang poppler vips
-```
-
-`vs pdf:read` を Standard Mode で実行した際にも、Enhanced Mode へ切り替えるためのインストール手順が自動案内されます。
+`vs doctor --fix` が、OCR と画像抽出に必要な外部ツール（[一覧](#外部ツール)）をインストールします。
 
 ## 使い方
 
@@ -45,7 +40,7 @@ brew install tesseract tesseract-lang poppler vips
 vs pdf:read document.pdf
 ```
 
-本体はこの gem を require せず、実行ファイル `vivlio-starter-pdf read PDF key=value …` を別プロセスとして呼び、標準出力の JSON を受け取ります。AGPL のコードを MIT の本体へ取り込まないための分け方です。`read` を持つのは 1.2.0 以降で、本体はそれより古いプラグインを Enhanced Mode に使いません。
+本体はこの gem を require せず、実行ファイル `vivlio-starter-pdf read PDF key=value …` を別プロセスとして呼び、標準出力の JSON を受け取ります。AGPL のコードを MIT の本体へ取り込まないための分け方です。
 
 標準（MIT）実装に戻して動作を比べたいときは、環境変数で無効化できます。
 
@@ -73,10 +68,7 @@ provider.page_count(pdf_path)
 
 `add_outline!` は成功で `true`、失敗で `false` を返し、`page_count` は失敗で `nil` を返します。**例外は外へ出しません**（本体のビルドパイプラインの途中から呼ばれるため）。失敗しても入力 PDF は書き換えません。
 
-> [!NOTE]
-> **隠しノンブルはこの gem にはありません。** かつては本体から委譲されていましたが、CombinePDF が保存時に named destinations を再構築しない問題があり、本体は Prawn ＋ `qpdf --overlay` の MIT 共通実装へ移しました。プラグインの有無で成果物が変わらないほうがよい処理なので、戻す予定はありません。
-
-`add_outline!` の `items` は `{ level:, text:, page: }` の配列です。壊れた項目（不正な UTF-8 のタイトル・範囲外ページ・空タイトル）は 1 件ずつ飛ばして残りを書き込み、飛ばした理由をログに出します。
+`add_outline!` の `items` は `{ level:, text:, page: }` の配列です。`top:`（見出しの y 座標）を加えると、しおりの移動先がその位置になります。省くとページ全体が移動先になります。壊れた項目（不正な UTF-8 のタイトル・範囲外ページ・空タイトル）は 1 件ずつ飛ばして残りを書き込み、飛ばした理由をログに出します。
 
 ## 設定
 
@@ -84,11 +76,11 @@ provider.page_count(pdf_path)
 
 ```yaml
 pdf_read:
-  text_area:
-    top_margin: 18
-    bottom_margin: 20
-    inner_margin: 15
-    outer_margin: 12
+  text_area:           # 柱が本文に混ざるときだけ、除く幅を mm で書く
+    top_margin:
+    bottom_margin:
+    inner_margin:
+    outer_margin:
   page_separator: false
   ocr:
     mode: auto
@@ -107,13 +99,14 @@ pdf_read:
 | [HexaPDF](https://hexapdf.gettalong.org/) | ~> 1.0 | PDF 解析・編集 |
 | [ruby-vips](https://github.com/libvips/ruby-vips) | ~> 2.2 | 高速画像処理 |
 
-### 外部ツール（任意）
+### 外部ツール
 
 | ツール | 用途 |
 | --- | --- |
-| Tesseract | OCR エンジン |
-| poppler（pdftoppm） | PDF → 画像変換 |
+| Tesseract、tesseract-lang | OCR エンジンと言語データ |
+| poppler（pdftoppm、pdfimages） | PDF → 画像変換、HexaPDF が書き出せない画像の抽出 |
 | libvips | 画像処理バックエンド |
+| ImageMagick | 抽出した画像の WebP 変換 |
 
 ## 開発
 

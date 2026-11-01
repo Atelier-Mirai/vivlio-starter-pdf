@@ -7,16 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-- **開発で試す Ruby を 3.4.10 / 4.0.9 にした**（`.ruby-version`・`rake test:versions`）。4.0.9 は 2026-10-23 公開。gem の中身は変わらない。
-
 ### Planned
 - パフォーマンス最適化（大規模 PDF 対応）
 - 追加 OCR エンジン対応
 - クラウド OCR サービス連携
 - PDF 暗号化対応
 
-## [1.2.0] - 2026-09-23
+## [1.2.0] - 2026-11-01
 
 ### Added
 - **しおりの項目が `:top` を持つとき、見出しの位置まで飛ぶようにした** (`outline_writer.rb`・本体 `pdf-outline-heading-id-spec.md` R7): 本体は節と項の項目に、見出しの上端の y（PDF の座標）を `:top` として渡す。`[ページ, /XYZ, null, top, null]` を書くので、左端と倍率は読者のまま変わらない。`:top` が無い項目（章。章扉は見出しの上に扉絵がある）は、今までどおりページ全体を見せる。`:top` がページの外を指すときや数でないときは、項目を落とさずページ全体に戻す。古い本体は `:top` を渡さないので、今までと同じに動く。
@@ -44,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **HexaPDF が書けない画像を pdfimages で書き出し、白地の多い絵の枠を削りすぎないようにした** (`reader.rb` の `write_extracted_image`・`poppler_page_images`・`bridge_sparse`・`pdf-read-ocr-improvement-notes.md` §4.20): HexaPDF は色の表（Indexed）を別のオブジェクトに置いた画像の情報を読めずに例外を出し、`fundamentals-of-system-design.pdf` の回路図などが 103 個中 9 個しか取れなかった。書けない画像は `pdfimages` でページの画像を書き出し、`-list` のオブジェクトの番号で選ぶ（103 個すべて取れる）。また、図の枠を埋まった行の連なりへ削るとき、区画の境目にはさまる少しだけ埋まった行（1 割以上・8 本以内）で切っていたので、白地の多い絵や表紙の一部しか切り出せなかった。そうした行は続きとみなす（97 章の光格子時計の絵と『量子力学』の表紙が全体で取れる。ほかの図は変わらない）。
 - **OCR を切る値 `disable` を受け付けるようにし、読めない命令のあるページでも読み続けるようにした** (`reader.rb` の `normalize_ocr_mode`・`PageTextCollector#process`・`pdf-read-ocr-improvement-notes.md` §4.19): 本体と `book.yml` は OCR を切る値を `disable` と書くが、`never`・`false`・`off` しか知らず `auto` にしていた（最初のコミットから）。また、資源に無い色空間（dvipdfmx の `/CS0 cs`）や縦書きの字で HexaPDF が例外を出すと、ページの文字と画像の位置を丸ごと捨てていた。2 つが重なり、文字の層のある PDF の全ページを OCR して、探究 Rust プログラミング（392 頁）・データ解析に強くなる Rust レシピ（313 頁）が 15 分を超えても終わらなかった。`disable`・`disabled` を `:never` にし、失敗した命令だけを飛ばす。2 冊は 5.7 秒・7.1 秒で終わり、画像は 3 枚・38 枚取れる。
 - **文字を 1 字ずつ描く PDF で、各行が「全文＋先頭の 1 字を欠いた全文」に二重化していた** (`reader.rb` の `PageTextCollector#build_lines`): 行の組み立てが `buffer = +fragment.text` で始まっていた。`+` は凍結されていない文字列を複製せずに返すので、続く `<<` が先頭の断片の文字列そのものを行全体へ書き換える。`extract_page_content` は `text` と `lines` で組み立てを 2 回呼ぶため、2 回目の各行が膨らんでいた。Chrome（Vivliostyle）の PDF は字ごとに断片を描くので、`vs build` の PDF では全行がこうなる。最初のコミットからあった。Prawn で作る fixture は 1 行を 1 断片で描くため、通し経路のテストでは表に出なかった。複製して受けるようにし、複数断片の行を 2 回組み立てるテストを足した。
-- **統合テストが、どの環境でも一度も走っていなかった** (`test/reader_test.rb`): fixture が隣の repo（`../vivlio-starter/sources/*.pdf`）を指していたが、その PDF は**どこにも存在しなかった**。`File.exist?` が false を返して skip するだけなので赤くならず、**この gem の中核である `reader.rb`（1,262 行）の通し経路は未検証のまま**だった。この版で直した OCR 補正の不具合（補正表の読み込み先）も、それを捕まえるはずのテストが止まっていた。
+- **統合テスト 2 件が skip されたままになっていた** (`test/reader_test.rb`): fixture が隣の repo（`../vivlio-starter/sources/*.pdf`）を指していたが、その PDF は `.gitignore` の対象で git に入っておらず、開発機からも無くなっていた。`File.exist?` が false を返すとテストは skip され、失敗として報告されないので、**この gem の中核である `reader.rb`（1,262 行）の通し経路は未検証のまま**だった。この版で直した OCR 補正の不具合（補正表の読み込み先）も、それを捕まえるはずのテストが止まっていた。
 
   fixture を `test/fixtures/` へ同梱し、組み立て手順を `build_fixtures.rb` に残した。読む側が HexaPDF なので、作る側は Prawn にしてある——同じ実装で作って読むと、その実装の癖が打ち消し合って検証から外れる。OCR 用には文字レイヤーを持たない PDF（`scanned.pdf`）を焼いた。テストは **34 runs / 2 skips → 37 runs / 0 skips** になった。
 
@@ -55,7 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **スキャンした PDF の OCR を約 4 倍速くした** (`reader.rb`): ページ全体を覆う埋め込みの画像（JPEG・PNG）があれば、`pdftoppm` でページを描き直さず、その画像を Tesseract へ渡す。描き直しは 300dpi・A4 の JPEG 1 枚で 23 秒かかり、読み取りの時間のほぼすべてだった（書き出しなら 0.05 秒）。24 ページのスキャンで 624 秒 → 151 秒、読み取りの結果は変わらない（原稿との一致の F 値 88.7% → 88.6%）。解像度はページの寸法からではなく画像の幅で見る。ページを実物より大きく作ったスキャン PDF（1542×2048pt に幅 2,057px）を設定の dpi で描き直すと、情報の増えない 3 倍の引き伸ばしになるため。幅が 1,600px に届かない画像は vips で拡大してから読む（幅 875px で確信度 88.8 → 92.2。300dpi の描き直しと同等で 0.5 秒）。回転の指定があるページ、縦横比が合わない画像、vips が無いときの小さな画像は、これまでどおり描き直す。`pdf_read.ocr.dpi` は描き直すページにだけ効く。あわせて Tesseract を 1 ページ 1 回の起動にした（これまでは TSV 用とテキスト用の 2 回）。残る時間の大半は図版の検出（vips・1 ページ約 3 秒）である。
 - **OCR の言語を書かないときの既定を、日本語だけから日本語と英語（`jpn+eng`）にした**。`english` を `eng` へ読み替えるようにもした。英語を足すと、コードを含むページで識別子が 18 語中 7 → 16 語戻り、和文の文字の適合率も 93.7% → 97.6% に上がった。英字の少ない本でも和文は悪くならない（2 冊で測定）。
-- **対応 Ruby を 3.4.10 / 4.0.7 にした**。4.0.7 は 2026-09-15 公開。
+- **対応 Ruby を 3.4.10 / 4.0.9 にした**（`.ruby-version`・`rake test:versions`）。4.0.9 は 2026-10-23 公開。
 - **依存を最新へ上げた**: HexaPDF 1.6.0 → 1.10.0、Minitest → 6.0.6、minitest-reporters 1.7.1 → 1.8.0。
 - **rubocop を入れた**（`.rubocop.yml`・`rake rubocop`・CI）。見るのは `Lint` と `Security` だけで、引用符や行数は見ない。読みやすさを削ってまで様式に従うものではなく、本体 `vivlio-starter` も同じ構えを採っている。現状 0 件。
 - **OCR の補正表を、校正辞書から独立した `config/ocr_corrections.yml` へ移した** (`reader.rb`): 走査の誤りと表記の方針は別物である。校正辞書に置くと**全原稿**に当たるため、本体側で実測すると `Al => AI`（OCR が AI をエルの小文字と読み違える補正）がアルミニウムの元素記号と人名 Al Gore を書き換え、`語芸 => 語彙` が「言語芸術」を「言語彙術」にしていた。しかも prh 由来の指摘は自動修正を持つので、`vs lint --fix` が黙って壊す。補正表を分ければ**当たるのは OCR したページのテキストだけ**になる。
