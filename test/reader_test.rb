@@ -7,8 +7,7 @@ require "test_helper"
 
 # Reader クラスのテストスイート
 class ReaderTest < Minitest::Test
-  # 統合テスト用の PDF。**repo に同梱してある**（test/fixtures/build_fixtures.rb が作る）。
-  # かつては隣の repo を指しており、その PDF は存在しないので常に skip していた。
+  # 統合テスト用の PDF（test/fixtures/build_fixtures.rb が生成する）
   SAMPLE_PDF = File.expand_path("fixtures/sample.pdf", __dir__)
   # 文字レイヤーを持たない PDF。OCR を通さない限り 1 文字も取り出せない
   OCR_SAMPLE_PDF = File.expand_path("fixtures/scanned.pdf", __dir__)
@@ -49,9 +48,6 @@ class ReaderTest < Minitest::Test
 # OCR 結果を埋め戻した PDF は、字の間に空白が入る。そのまま Markdown にすると
 # 読めないので、読み取りの途中で詰め直す（collapse_ocr_japanese_spaces /
 # collapse_fragmented_words / normalize_ocr_brackets）。
-#
-# **この 3 つは、どのテストからも呼ばれていなかった。** 実物の PDF が repo に
-# 無く、通し経路のテストが skip し続けていたためである。
 def test_execute_collapses_spaces_scattered_between_characters
   text = VivlioStarter::Pdf::Reader.new(FRAGMENTED_PDF).execute[:page_texts].first
 
@@ -352,15 +348,14 @@ end
     end
   end
 
-  # 本体と book.yml は OCR を切る値を disable と書く。以前は disable を知らず :auto にしていた
+  # 本体と book.yml は OCR を無効にする値を disable と書く
   def test_should_accept_disable_as_ocr_off
     %w[disable disabled never off].each do |value|
       assert_equal(:never, VivlioStarter::Pdf::Reader.new(SAMPLE_PDF, ocr: { mode: value }).send(:ocr_mode), value)
     end
   end
 
-  # 資源に無い色空間（dvipdfmx の `/CS0 cs`）のような 1 つの命令の失敗で、ページの読み取りを止めない。
-  # 以前はページの画像の位置も捨て、OCR を切っても画像が 0 枚になった（切らなければ全ページを OCR した）
+  # 資源に無い色空間（`/CS0 cs`）のような 1 つの命令の失敗で、ページの読み取りを止めない
   def test_should_keep_images_on_page_with_broken_operator
     skip "ImageMagick が無い" unless imagemagick_available?
 
@@ -427,8 +422,8 @@ end
       normalized_second_page = result[:page_texts][1].gsub(/[[:space:]]+/, "")
 
       assert_equal(2, result[:pages])
-      # 1 ページ目は読み取りが安定している。2 ページ目は OCR が崩しがちなので、
-      # 何かしら日本語が取れたことだけを見る（OCR の精度はここで測るものではない）
+      # 1 ページ目の OCR の結果は安定している。2 ページ目は安定しないので、
+      # 日本語が読めたことだけを確かめる（OCR の精度はここでは検証しない）
       assert_includes(normalized_first_page, "プログラミング技術習得の三要素")
       assert_match(/\p{Han}|\p{Hiragana}|\p{Katakana}/, normalized_second_page)
       refute_includes(result[:page_texts].first, "Detected ")
@@ -443,7 +438,6 @@ end
   end
 
   # スキャンのページは、ページを描き直さずに埋め込みの画像を読む。
-  # 描き直し（pdftoppm）は 300dpi・A4 の JPEG で 1 ページ 23 秒かかり、読み取りの時間のほぼすべてだった。
   # scanned.pdf の画像は幅 875px と画素が足りないので、vips で 1,600px まで拡大してから読む
   def test_should_read_embedded_scan_image_without_rendering_page
     skip "OCR dependencies are not available" unless ocr_dependencies_available?
@@ -464,9 +458,8 @@ end
     reader&.send(:cleanup_ocr_temp_dir, result&.temp_dir)
   end
 
-  # 画像の配置を整数で書いた PDF でも、スキャンのページと見分ける。
-  # 座標が Integer で来ると縦横比の割り算が 0 になり、実物のスキャン PDF（1290×1916pt に
-  # 1720×2555px）が描き直しへ落ちていた。Prawn で作る fixture は小数で置くので表に出なかった
+  # 画像の配置を整数で書いた PDF でも、スキャンのページと判定する
+  # （座標が Integer だと縦横比の割り算が 0 になる）
   def test_should_detect_scanned_page_when_image_is_placed_with_integer_coordinates
     reader = VivlioStarter::Pdf::Reader.new(OCR_SAMPLE_PDF)
     page = HexaPDF::Document.open(OCR_SAMPLE_PDF).pages.first
@@ -488,9 +481,8 @@ end
     assert_nil(reader.send(:embedded_scan_image, page, occurrences))
   end
 
-  # OCR の誤認識補正が config/ocr_corrections.yml から読まれ、OCR テキストに当たることを検証する。
-  # 以前はプロジェクトの prh 校正辞書（textlint_prh.yml）を見ており、改名後は表が空のまま
-  # 気づかれずに素通りしていた。あわせて、当てすぎないこと（言語芸術・Al）も確かめる
+  # OCR の誤認識補正が config/ocr_corrections.yml から読まれ、OCR テキストに適用されることを検証する。
+  # 補正の対象外の語（言語芸術・Al）が変わらないことも確かめる
   def test_postprocess_ocr_text_applies_corrections_from_project_config
     Dir.mktmpdir do |dir|
       FileUtils.mkdir_p(File.join(dir, "config"))
@@ -522,7 +514,7 @@ end
     end
   end
 
-  # 補正表が無いプロジェクト（1.0 より前の雛形）では、補正せずに素通りさせる
+  # 補正表が無いプロジェクトでは補正しない
   def test_postprocess_ocr_text_passes_through_without_corrections_file
     Dir.mktmpdir do |dir|
       reader = VivlioStarter::Pdf::Reader.new("dummy.pdf")
@@ -533,9 +525,7 @@ end
   end
 
   # 行の組み立ては何度呼んでも同じ結果を返す。extract_page_content が text と lines で
-  # 2 回呼ぶため、1 回目が断片の文字列を書き換えると、2 回目の各行が
-  # 「全文＋先頭の断片を欠いた全文」に膨らむ（vs build の PDF で全行がこうなっていた）。
-  # Prawn で作る fixture は 1 行を 1 断片で描くので、通し経路のテストでは表に出なかった
+  # 2 回呼ぶため、1 回目が断片の文字列を書き換えると、2 回目の各行の文字列が重複する
   def test_should_build_same_lines_on_every_call_when_line_has_several_fragments
     collector = VivlioStarter::Pdf::Reader::PageTextCollector.new(nil, bounds: nil, line_merge_tolerance: 2.0)
     fragment = VivlioStarter::Pdf::Reader::Fragment
@@ -601,7 +591,7 @@ end
   end
 
   # 二度読みは、確信度の平均ではなく確信度の高い語の字数で選ぶ。平均で選ぶと、字を落とした読みを
-  # 選ぶことがある（絵の本の 40 ページ: 平均は二値化が高いが、字は 433 → 325 に減る）
+  # 選ぶことがある
   def test_should_choose_reading_with_more_confident_characters
     reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)
     header = %w[level page_num block_num par_num line_num word_num left top width height conf text].join("\t")
@@ -633,7 +623,6 @@ end
   end
 
 # pages で読むページを絞る。読まないページは文字も画像も取らず、空の値を置いてページの添字をそろえる
-# （vs pdf:read --pages。pdf-read-file-naming-spec.md §10）
 def test_should_read_only_the_given_pages
   Dir.mktmpdir do |dir|
     result = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF, images_dir: dir, image_reference_dir: "", pages: [2]).execute
@@ -662,8 +651,7 @@ def test_should_report_progress_within_the_given_pages
   assert_equal([[3, 3]], calls)
 end
 
-  # スキャンの解像度はページの幅から見積もり、400dpi を超えれば 300dpi へ縮めて読む。
-  # 600dpi のまま読むと、字が大きすぎて読み違える（97 章で F 値 89.3% → 縮めて 90.6%）
+  # スキャンの解像度はページの幅から見積もり、400dpi を超えれば 300dpi へ縮めて読む
   def test_should_downscale_scan_above_400dpi
     skip "Vips is not available" unless vips_available?
 
@@ -763,7 +751,7 @@ end
     assert_equal([[20, ["eng"]]], calls)
   end
 
-  # Tesseract が読み飛ばした範囲（語の無いブロック）は、接し合うものをまとめて読み直す範囲にする。
+  # Tesseract が文字を検出しなかった範囲（語の無いブロック）は、接し合うものをまとめて読み直す範囲にする。
   # 小さいものと、すでに読めた語が覆っているもの（囲みの中の文が別のブロックで読めている）は除く
   def test_should_find_skipped_regions_to_read_again
     reader = VivlioStarter::Pdf::Reader.new(SAMPLE_PDF)

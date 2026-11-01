@@ -4,18 +4,11 @@ require "bundler/gem_tasks"
 require "rake/testtask"
 require "rubocop/rake_task"
 
-# 見るのは Lint と Security だけ（.rubocop.yml）。様式ではなくバグの芽を拾う
 RuboCop::RakeTask.new(:rubocop)
 
-# gemspec が Ruby 3.4 以上を謳う以上、それが本当かは実際に走らせないと分からない。
-# `it`（暗黙ブロック引数）は 3.3 以下でも構文エラーにならず「it というメソッドの
-# 呼び出し」として通り、実行時に NameError になる——静的解析では捕まらない。
 SUPPORTED_RUBY_VERSIONS = %w[3.4.10 4.0.9].freeze
 
-# 別の Ruby を子プロセスで起動する以上、親の bundler 環境は必ず捨てる。
-# `bundle exec rake test` から呼ばれると、親（現在の Ruby）の bundler を
-# 子（別の Ruby）が読みに行き、テストが始まる前に LoadError で落ちる。
-# nil を渡すと、その環境変数は子から取り除かれる。
+# 子プロセスは別の Ruby で動くので、親の bundler の環境変数を渡さない（値が nil の変数は取り除かれる）
 UNBUNDLED_ENV = {
   "RUBYOPT" => nil, "RUBYLIB" => nil, "GEM_HOME" => nil, "GEM_PATH" => nil,
   "BUNDLE_GEMFILE" => nil, "BUNDLE_BIN_PATH" => nil, "BUNDLER_VERSION" => nil,
@@ -23,7 +16,6 @@ UNBUNDLED_ENV = {
 }.freeze
 
 namespace :test do
-  # テストの実体。現在の Ruby で 1 回だけ走る（test:versions が各版でこれを呼ぶ）
   Rake::TestTask.new(:current) do |t|
     t.libs << "test"
     t.libs << "lib"
@@ -40,7 +32,6 @@ namespace :test do
       MESSAGE
     end
 
-    # 版ごとに bundle が要る。未導入なら黙って入れる（その版の初回だけ時間がかかる）
     failed = SUPPORTED_RUBY_VERSIONS.reject do |version|
       puts "\n=== Ruby #{version} ==="
       env = UNBUNDLED_ENV.merge("RBENV_VERSION" => version)
@@ -57,12 +48,10 @@ namespace :test do
   end
 end
 
-# 手元では常に対応全版を回す（1 版あたり 10 秒弱で終わるため、分けるほどの負担にならない）。
-# CI（GitHub Actions）は版をマトリクスで分担するので、各ジョブは 1 回でよい。
+# CI は Ruby の版をマトリクスで分担するので、各ジョブは現在の Ruby だけでテストする
 task test: (ENV["CI"] ? "test:current" : "test:versions")
 task default: %i[rubocop test]
 
-# gem のアンインストール → ビルド → インストールを一括実行
 task :reinstall do
   gemspec = Dir['*.gemspec'].first
   raise 'gemspec が見つかりません' unless gemspec

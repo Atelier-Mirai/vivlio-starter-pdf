@@ -1,19 +1,17 @@
 # frozen_string_literal: true
 
 # ================================================================
-# Test: robustness/broken_pdf_test.rb
-# ================================================================
 # 検証内容:
 #   壊れた PDF・空ファイル・存在しないパス・暗号化 PDF を渡したとき、
 #   例外を投げずに「できなかった」を戻り値で返すこと。
 #
-#   ここは本体（vivlio-starter）のビルドパイプラインから呼ばれる。1 つの PDF 操作が
-#   例外で飛ぶとビルド全体が落ちるため、**このプロバイダの公開 API は例外を外へ出さない**
-#   のが約束である（page_count は nil、add_outline! は false）。
+#   本体（vivlio-starter）のビルドパイプラインから呼ばれるので、1 つの PDF 操作の例外で
+#   ビルド全体が止まらないよう、**このプロバイダの公開 API は例外を外へ出さない**
+#   （page_count は nil、add_outline! は false を返す）。
 #
-#   あわせて **入力ファイルを壊さないこと** を見る。add_outline! は
-#   読み込んだのと同じパスへ書き戻すため、失敗時に元 PDF が切り詰められると
-#   「ビルドは続いたが成果物が壊れた」という最悪の失敗になる。
+#   あわせて **入力ファイルを変更しないこと** を確かめる。add_outline! は読み込んだのと
+#   同じパスへ書き戻すため、失敗時に元の PDF が切り詰められると、ビルドは成功するのに
+#   成果物が破損する。
 # ================================================================
 
 require_relative "../test_helper"
@@ -51,7 +49,7 @@ class BrokenPdfTest < Minitest::Test
     end
   end
 
-  # 失敗しても入力を書き換えない。ここが崩れると「壊れた成果物が静かに残る」
+  # 失敗しても入力を書き換えない
   def test_should_not_damage_the_input_when_it_fails
     in_workdir do
       make_broken_pdf("broken.pdf")
@@ -80,7 +78,7 @@ class BrokenPdfTest < Minitest::Test
     end
   end
 
-  # 書き込めない PDF でも、元ファイルは無傷のまま false を返す
+  # 書き込めない PDF でも、元のファイルを変更せずに false を返す
   def test_readonly_pdf_is_left_untouched
     in_workdir do
       make_pdf("ro.pdf")

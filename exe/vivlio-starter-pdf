@@ -54,8 +54,8 @@ module VivlioStarter
         fail_with("read の設定を解釈できません: #{e.message}")
       end
 
-      # `key=value` の並びを Reader.new のキーワード引数へ変える。知らないキーは誤りとして止める
-      # （本体と版がずれて設定が黙って捨てられるのを防ぐ）
+      # `key=value` の並びを Reader.new のキーワード引数へ変える。未知のキーは誤りとして終了する
+      # （本体と版が異なるときに、設定が無視されるのを防ぐ）
       def self.parse_read_options(settings)
         settings.to_h do |setting|
           key, value = setting.split('=', 2)

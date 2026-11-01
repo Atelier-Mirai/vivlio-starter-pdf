@@ -1,15 +1,11 @@
 # frozen_string_literal: true
 
 # ================================================================
-# Test: robustness/outline_entry_test.rb
-# ================================================================
 # 検証内容:
 #   壊れたアウトライン項目が混ざったとき、**その 1 件だけを飛ばして残りを書く**こと。
 #
-#   これは「落ちないこと」より強い要求である。アウトラインは本のしおりなので、
-#   見出しが 1 つ壊れているだけで全滅すると、読者は目次から本文へ飛べなくなる。
-#   しかも add_outline! は false を返すだけで PDF 自体は出来上がるため、
-#   **成果物を開くまで気付けない**種類の失敗になる。
+#   アウトラインは本のしおりなので、1 件の不正な見出しでしおり全体を失わないようにする。
+#   add_outline! は false を返すだけで PDF は生成されるので、失敗は成果物を開くまで分からない。
 #
 #   飛ばした項目は必ず on_skip で理由つきに報告する（著者が原稿を直せるように）。
 # ================================================================
@@ -24,7 +20,7 @@ class OutlineEntryTest < Minitest::Test
   BROKEN_TITLE = "壊れた\xFF".dup.force_encoding(Encoding::UTF_8)
 
   # 不正な UTF-8 のタイトルは String#strip が Encoding::CompatibilityError を投げる。
-  # 素通しにすると add_outline! の rescue まで飛び、しおりが丸ごと消える
+  # 捕まえないと add_outline! の rescue まで伝わり、しおりがすべて失われる
   def test_should_skip_invalid_utf8_title_and_keep_the_rest
     inserted, skips = write_outline([GOOD, { level: 1, text: BROKEN_TITLE, page: 1 }])
 

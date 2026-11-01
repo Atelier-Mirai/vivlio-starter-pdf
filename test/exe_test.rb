@@ -8,8 +8,6 @@ require "test_helper"
 
 # exe/vivlio-starter-pdf を子プロセスとして起動して確かめる。
 # 本体 vivlio-starter は AGPL のこの gem を require せず、この実行ファイルを呼ぶ。
-# 窓口の `read` は 1.1.2 まで存在せず、`vs pdf:read` の Enhanced Mode は
-# 「Unknown option 'read'」で一度も動いていなかった（本体のテストは呼び出しをスタブしていた）
 class ExeTest < Minitest::Test
   EXE = File.expand_path("../exe/vivlio-starter-pdf", __dir__)
   LIB = File.expand_path("../lib", __dir__)
@@ -44,7 +42,7 @@ class ExeTest < Minitest::Test
     end
   end
 
-  # 知らない設定は黙って捨てずに止める。本体と版がずれたことに気づけるように
+  # 未知の設定は無視せず終了する。本体と版が異なることを検出するため
   def test_should_fail_without_json_on_unknown_setting
     stdout, stderr, status = run_exe("read", SAMPLE_PDF, "colour=red")
 

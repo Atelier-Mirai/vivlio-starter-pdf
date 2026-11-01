@@ -90,18 +90,9 @@ module VivlioStarter
 
       # Returns the trimmed title, or +nil+ when the entry must be skipped.
       #
-      # A title carrying invalid UTF-8 bytes makes +String#strip+ raise
-      # +Encoding::CompatibilityError: invalid byte sequence in UTF-8+. Letting that
-      # escape costs the *entire* outline: +add_outline!+ rescues at the top, so one
-      # mojibake heading would leave the book with no bookmarks at all. Every other
-      # kind of bad entry is skipped one by one through +on_skip+ — this one must
-      # behave the same way, and the message has to name the entry so the author can
-      # fix the manuscript heading that produced it.
-      #
-      # Both +EncodingError+ and +ArgumentError+ are caught on purpose: which one
-      # Ruby raises for broken bytes depends on the method (+strip+ raises
-      # +Encoding::CompatibilityError+, +match?+ raises +ArgumentError+), and that
-      # detail must not decide whether the book keeps its bookmarks.
+      # Invalid UTF-8 makes +strip+ raise +Encoding::CompatibilityError+ and +match?+ raise
+      # +ArgumentError+. Both are caught so that the entry is skipped through +on_skip+ and
+      # the rest of the outline is still written.
       def entry_title(raw)
         fetch(raw, :text, fetch(raw, :title, nil)).to_s.strip
       rescue EncodingError, ArgumentError
@@ -112,11 +103,8 @@ module VivlioStarter
 
       # Fetches a value from the entry by symbol or string key.
       #
-      # Entries come from the caller, so a stray String or Integer can end up in the
-      # array. Both answer +respond_to?(:[])+ but raise +TypeError+ when indexed with
-      # a Symbol (+Integer#[]+ is bit access), which would abort the whole outline —
-      # exactly what the per-entry skip exists to prevent. Duck typing is kept so a
-      # Hash-like object still works; only the indexing failure falls back.
+      # A String or Integer in the array answers +respond_to?(:[])+ but raises +TypeError+
+      # when indexed with a Symbol, so that failure returns +fallback+.
       def fetch(raw, key, fallback)
         value = (raw[key] || raw[key.to_s] if raw.respond_to?(:[]))
         value.nil? ? fallback : value
@@ -134,7 +122,7 @@ module VivlioStarter
       end
 
       # Resolves the destination for an entry: the heading position when +top+ lies on
-      # the page, otherwise the whole page (as before +:top+ existed).
+      # the page, otherwise the whole page.
       def resolve_destination(page_number, top = nil)
         index = page_number.to_i - 1
         return nil unless index.between?(0, @page_count - 1)

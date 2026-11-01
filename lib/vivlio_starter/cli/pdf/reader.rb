@@ -26,7 +26,7 @@ module VivlioStarter
         def initialize(text:, lines:, image_occurrences:, words: []) = super
       end
       # OCR で読んだ 1 語。座標は PDF のページ（左下が原点・pt）。y はベースライン、size は行の高さ。
-      # 本体（vivlio-starter）は語を 1 字ずつに割り、紙面の推定（経路 B）で見出しや段落を戻す
+      # 本体（vivlio-starter）はこの語から見出しや段落を推定する
       OcrWord = Data.define(:text, :x, :y, :width, :size, :conf)
       # 抽出済み画像アセット（ページ番号・ファイル名・座標情報を保持）
       ImageAsset = Data.define(:page, :index, :filename, :output_path, :reference_path, :x, :top, :bottom, :center_y, :left, :right, :width, :height)
@@ -67,27 +67,24 @@ module VivlioStarter
         end
       end
 
-      # --- 二度読み（§2.2） ---
-      # 囲みの地の割合がこれ以上のページだけ二度読みする。97 章のスキャンでは 23 ページ中 4 ページが
-      # 当たり、全ページ二度読みしたときの効果の約 6 割が得られる
+      # --- 二度読み ---
+      # 囲みの地の割合がこれ以上のページだけ二度読みする
       TWO_PASS_TINT = 0.08
       # 読みを選ぶ基準にする確信度
       CONFIDENT_WORD = 80
 
-      # --- 読み飛ばした範囲の読み直し（pdf-read-ocr-improvement-notes.md §4.11） ---
+      # --- 文字が検出されなかった範囲の読み直し ---
       # 読み直す範囲の大きさの下限（ページの幅を 595 とした単位。A4 なら pt）
       REREAD_MIN_WIDTH = 60
       REREAD_MIN_HEIGHT = 18
-      # すでに読めた語がこれを超えて覆う範囲は読み直さない。地の色の付いた囲みの中の文やコードは、別の
-      # ブロックで読めていて 15〜30% を覆う。読み直して置き換えると、良くなる行と悪くなる行が混じった
-      # （最高・600dpi で F 値 91.4% → 90.7%）。表や色の帯の見出しは 0〜9%
+      # すでに読めた語がこれを超えて覆う範囲は読み直さない。地の色の付いた囲みの中の文やコードは別の
+      # ブロックで読めていて 15〜30% を覆い、表や色の帯の見出しは 0〜9% を覆う
       REREAD_MAX_COVERAGE = 0.1
-      # 切り出すときの余白（画像の幅に対する割合。300dpi の A4 で 24px）。読み直しは切り出し方に敏感で、
-      # 97 章では 20〜30px の間でも F 値が 0.2 ポイント上下した
+      # 切り出すときの余白（画像の幅に対する割合。300dpi の A4 で 24px）
       REREAD_PADDING = 24 / 2480.0
 
-      # --- 傾きの補正（pdf-read-ocr-improvement-notes.md §4.14） ---
-      # 測る傾きの範囲と刻み（度）。スキャナに置いた紙は少し傾く（97 章のスキャンで、表と裏が交互に ±0.5〜1.1°）
+      # --- 傾きの補正 ---
+      # 測る傾きの範囲と刻み（度）
       DESKEW_RANGE = 3.0
       DESKEW_STEP = 0.05
       # これより小さい傾きは直さない
@@ -95,17 +92,16 @@ module VivlioStarter
       # 傾きを測る画像の幅（px）。縮めて測っても 0.05° の刻みで決まる
       DESKEW_WORK_WIDTH = 620
 
-      # --- 斜体の行の読み直し（pdf-read-ocr-improvement-notes.md §4.15） ---
+      # --- 斜体の行の読み直し ---
       # 読み直す行の確信度の平均の上限。斜体の行は 0〜40 の意味の無い英字になるか、60〜70 の崩れた和文になる
       SLANT_MAX_CONFIDENCE = 75
       # 読み直す行の字数の下限（図の中の短い札を除く）
       SLANT_MIN_CHARACTERS = 8
-      # 戻す傾き（度）。Chrome は斜体の無い和文の書体を傾けて描く。97 章では 10〜14° のどれでも読め、12° が最もよかった
+      # 戻す傾き（度）。Chrome は斜体の無い和文の書体を傾けて描く
       SLANT_ANGLE = 12
 
-      # --- 英語での読み直し（pdf-read-ocr-improvement-notes.md §4.6） ---
-      # 英字の語がこれ以上あるページだけ、英語の学習データでも読む。97 章のスキャンでは 24 ページ中
-      # 6〜8 ページ（コードのあるページ）が当たり、10〜30 のどこに置いても成績は変わらなかった
+      # --- 英語での読み直し ---
+      # 英字の語がこれ以上あるページだけ、英語の学習データでも読む
       ENGLISH_PAGE_WORDS = 20
       # 英語の読みを採るのに要る確信度。日本語＋英語の読みと食い違う語の平均で見る。
       # 「11月」の「11」を英語の読みは「lL」（確信度 35）と読む
@@ -115,31 +111,29 @@ module VivlioStarter
       # 英字の語（ASCII とラテン文字、英文の引用符とダッシュ）
       LATIN_WORD = /\A(?:\p{ASCII}|\p{Latin}|[‘’“”–—])+\z/
 
-      # --- 図版の検出（pdf-read-ocr-improvement-notes.md §4.2・§4.4） ---
+      # --- 図版の検出 ---
       # ページを縮めて調べるときの幅（px）。A4 で約 37dpi、1 画素が約 2pt になる
       FIGURE_WORK_WIDTH = 310
       # 紙の明るさよりこれだけ暗い画素と、彩度（LCh の C）がこれを超える画素を、図の候補にする。
-      # 彩度は 10〜30 のどこでも 97 章の成績は同じで、淡い黄色の本の表紙が入るよう低めにした
+      # 淡い黄色の表紙が候補に入るよう、彩度は低めにする
       FIGURE_DARKNESS = 50
       FIGURE_CHROMA = 15
       # 確信度がこれ以上の語と、語の確信度の平均がこれ以上の行は、文字として図の候補から消す
       FIGURE_TEXT_CONFIDENCE = 60
       # 図とみなす大きさの下限。辺はページの幅に、面積はページの面積に対する割合（A4 で 40pt・6,000pt²）。
-      # 見出しの帯の色の札（A-2）や、MEMO の札、会話文の話者のアイコン（32pt 角）は外れる
+      # 見出しの色の札や、会話文の話者のアイコン（32pt 角）を除く
       FIGURE_MIN_SIDE = 40 / 595.0
       FIGURE_MIN_AREA = 6000 / (595.0 * 842.0)
       # 図の枠を削るときに残す、図の画素の埋まった列・行の割合
       FIGURE_DENSE = 0.3
       # 埋まった列・行のあいだで続きとみなす、少しは埋まった列・行の割合の下限と本数の上限（trim_to_dense）。
-      # 本数は縮めた画像の画素で、8 本は約 15pt。97 章では 4 本以下だと光格子時計の絵の上の帯（6 本）で切れ、
-      # 8 本と 12 本は同じ結果だった。ほぼ空の列・行（写真の横の字を消した跡・図の題との空き）はつながない
+      # 本数は縮めた画像の画素で、8 本は約 15pt。ほぼ空の列・行（写真の横の字を消した跡・図の題との空き）はつながない
       FIGURE_SPARSE = 0.1
       FIGURE_BRIDGE = 8
 
       # --- OCR に回す画像 ---
       # 埋め込みのスキャン画像がこの幅（px）に届かなければ、vips で拡大してから読む。
-      # A5 の本を約 230dpi、A4 を約 165dpi で取り込んだ幅にあたる。実測では幅 875px で拡大が効き
-      # （確信度 88.8 → 92.2）、幅 1,720px では効かなかった（92.2 → 91.9）
+      # A5 の本を約 230dpi、A4 を約 165dpi で取り込んだ幅にあたる
       MIN_OCR_IMAGE_WIDTH = 1600
       # これを超える解像度のスキャンは、TARGET_OCR_DPI へ縮めてから読む
       MAX_OCR_DPI = 400
@@ -160,10 +154,9 @@ module VivlioStarter
           @image_occurrences = []
         end
 
-        # 1 つの命令の失敗で、ページの読み取りを止めない（pdf-read-ocr-improvement-notes.md §4.19）。HexaPDF は、
-        # 資源に無い色空間（dvipdfmx の `/CS0 cs`）や縦書きの字（「Not yet implemented」）で例外を出す。
-        # 以前はページの読み取りが止まり、そのページの文字も画像の位置も捨てていた（探究 Rust・Rust レシピで画像 0 枚）。
-        # 失敗した命令だけを飛ばす。色空間も縦書きの字の位置も、画像の位置と横書きの文字には要らない
+        # 1 つの命令の失敗で、ページの読み取りを止めない。HexaPDF は、資源に無い色空間（`/CS0 cs`）や
+        # 縦書きの字（「Not yet implemented」）で例外を出す。色空間も縦書きの字の位置も、画像の位置と
+        # 横書きの文字の取得には使わないので、失敗した命令だけを飛ばす
         def process(operator, operands = [])
           super
         rescue StandardError
@@ -219,8 +212,7 @@ module VivlioStarter
 
             lines << Line.new(y: current_y, text: normalize_line(buffer)) unless buffer.empty?
             # 複製して受ける。`+fragment.text` は凍結されていない文字列をそのまま返すので、
-            # 下の `<<` が断片の文字列自体を書き換え、2 回目の呼び出し（text と lines）で
-            # 各行が「全文＋先頭の断片を欠いた全文」に膨らんでいた
+            # 複製しないと下の `<<` が断片の文字列自体を書き換える
             buffer = fragment.text.dup
             current_y = fragment.y
             previous_fragment = fragment
@@ -338,7 +330,7 @@ module VivlioStarter
       # @param ocr [Hash, nil] OCR 設定
       # @param progress [#call, nil] OCR するページごとに (何ページ目か, 読むページの数) で呼ぶ。OCR は 1 ページ数秒かかる
       # @param pages [Array<Integer>, nil] 読むページ（1 から数える）。省けば全ページ。読まないページは、文字も画像も OCR も
-      #   取らず、結果の配列には空の値を置く（ページの添字をそろえたまま、vs pdf:read --pages の OCR の時間を省く）
+      #   取らず、結果の配列には空の値を置く（ページの添字はそのまま）
       def initialize(pdf_path, page_separator: true, text_area: nil, line_merge_tolerance: 2.0, images_dir: nil, image_reference_dir: nil, ocr: nil,
                      progress: nil, pages: nil)
         @pdf_path = pdf_path
@@ -508,9 +500,8 @@ module VivlioStarter
         assets
       end
 
-      # 画像を書き出し、書けたかを返す。HexaPDF で書けない画像は、poppler の pdfimages で同じオブジェクトを
-      # 書き出す（pdf-read-ocr-improvement-notes.md §4.20）。HexaPDF は、色の表（Indexed）を別のオブジェクトに
-      # 置いた画像の情報を読めずに例外を出す（TeX の fundamentals-of-system-design.pdf の回路図 18 個）
+      # 画像を書き出し、書けたかを返す。HexaPDF で書けない画像（色の表 Indexed を別のオブジェクトに置いた
+      # 画像など）は、poppler の pdfimages で同じオブジェクトを書き出す
       def write_extracted_image(object, page_number, output_path)
         write_image_as_webp(object, output_path)
         true
@@ -670,7 +661,7 @@ module VivlioStarter
       end
 
       # 1 ページ分の OCR を実行し、OcrResult を返す
-      # ページ画像を用意し（§ ocr_source_image）、Tesseract でテキストと座標を一度に読む。
+      # ページ画像を用意し（ocr_source_image）、Tesseract でテキストと座標を一度に読む。
       # 囲みの多いページは二値化した画像でも読み、英字の多いページは英語の学習データでも読み直す
       def ocr_page_result(page, index, image_occurrences = [])
         temp_dir = Dir.mktmpdir("vivlio-pdf-ocr")
@@ -699,9 +690,8 @@ module VivlioStarter
 
       # OCR にかけるページ画像を用意し、[パス, 幅, 高さ] を返す。
       #
-      # スキャンしたページは、埋め込みの画像をそのまま書き出す。pdftoppm でページを描き直すと、
-      # 300dpi・A4 の JPEG 1 枚で 23 秒かかっていた（書き出しは 0.05 秒）。24 ページで 9.5 分の
-      # 読み取りのほぼすべてがこの描き直しだった。埋め込みの画像を使えないページは描き直す
+      # スキャンしたページは、埋め込みの画像をそのまま書き出す。pdftoppm による描き直しは 300dpi・A4 の
+      # JPEG 1 枚で 23 秒かかる（書き出しは 0.05 秒）。埋め込みの画像を使えないページは描き直す
       def ocr_source_image(page, index, image_occurrences, temp_dir)
         embedded = embedded_scan_image(page, image_occurrences)
         if embedded && (embedded.info.width >= MIN_OCR_IMAGE_WIDTH || vips_available?)
@@ -725,7 +715,7 @@ module VivlioStarter
       end
 
       # ページの大きさから見たスキャンの解像度（dpi）。ページを実物より大きく作った PDF では低く出るが、
-      # 縮める判定（MAX_OCR_DPI を超えるか）にしか使わないので、そういう PDF は縮めない側に倒れる
+      # 縮める判定（MAX_OCR_DPI を超えるか）にしか使わないので、そういう PDF は縮めないだけである
       def scan_dpi(page, image_width)
         box = media_box(page)
         return nil unless box && (box[2] - box[0]).positive?
@@ -733,8 +723,7 @@ module VivlioStarter
         image_width / ((box[2] - box[0]) / 72.0)
       end
 
-      # 解像度の高すぎるスキャンを 300dpi へ縮める。Tesseract は字が大きすぎても読み違える。
-      # 97 章を 600dpi で読むと F 値 89.3%・5 分 14 秒、300dpi に縮めると 90.3%・3 分 1 秒だった
+      # 解像度の高すぎるスキャンを 300dpi へ縮める。Tesseract は字が大きすぎても誤認識する
       def downscale_for_ocr(path, dpi, temp_dir)
         image = require_vips!::Image.new_from_file(path).resize(TARGET_OCR_DPI / dpi, kernel: :lanczos3)
         downscaled = File.join(temp_dir, "page-downscaled.jpg")
@@ -744,8 +733,7 @@ module VivlioStarter
       end
 
       # 画素の足りない画像を vips で拡大し、[パス, 幅, 高さ] を返す。
-      # 幅 875px（150dpi 相当）のスキャンで、2 倍にすると Tesseract の確信度が 88.8 → 92.2 に上がり、
-      # 読めなかった見出しが読めた。pdftoppm で 300dpi に描き直したとき（92.9）とほぼ同じで、0.5 秒で済む
+      # pdftoppm で 300dpi に描き直すのとほぼ同じ確信度が、0.5 秒で得られる
       def upscale_for_ocr(path, width, temp_dir)
         scale = (MIN_OCR_IMAGE_WIDTH.to_f / width).clamp(1.0, 3.0)
         image = require_vips!::Image.new_from_file(path).resize(scale, kernel: :lanczos3)
@@ -754,11 +742,10 @@ module VivlioStarter
         [upscaled, image.width, image.height]
       end
 
-      # スキャンの傾きを直す（pdf-read-ocr-improvement-notes.md §4.14）。傾いたままだと、切り出した図の縁に
-      # 三角の余白が付き、コードの行番号の欄や柱の高さがページの上と下で数 pt ずれる。
-      # 読み取りは傾いたままの画像で済ませ、ここでは語の位置だけを回す。回した画像を Tesseract に読ませると、
-      # 補間で字がにじんで読みが落ちる（97 章の 1 ページで確信度の高い字が 612 → 525、全体で英字の語が
-      # 212 → 184）。Tesseract は傾いた行もそのまま読める。回した画像は図を見つけて切り出すのに使う。
+      # スキャンの傾きを直す。傾いたままだと、切り出した図の縁に三角の余白が付き、コードの行番号の欄や
+      # 柱の高さがページの上と下で数 pt ずれる。
+      # 読み取りは傾いたままの画像で済ませ、ここでは語の位置だけを回す（回した画像を Tesseract に渡すと、
+      # 補間で字がにじんで認識率が下がる）。回した画像は図の検出と切り出しに使う。
       # 大きさは変えない（OCR の座標を、画像がページを覆う前提でページの座標へ換算するため）。
       # 回して空いた隅は紙の明るさで埋める
       # @return [Array(String, String)] [図を切り出す画像のパス, 語の位置を回した TSV]
@@ -801,7 +788,7 @@ module VivlioStarter
 
       # 傾き（度・時計回りに直す向きが正）。縮めた画像の濃い画素を角度ごとに回して行ごとに足し、行の並びが
       # いちばん鋭く出る（行ごとの和の二乗和が最大の）角度を採る。範囲の端に当たったら、行の並びが
-      # 見つからない（絵だけのページなど）とみなして 0 を返す。97 章の 1 ページで 0.2 秒
+      # 見つからない（絵だけのページなど）とみなして 0 を返す
       def skew_angle(gray)
         factor = [gray.width / DESKEW_WORK_WIDTH, 1].max
         small = gray.shrink(factor, factor)
@@ -818,10 +805,8 @@ module VivlioStarter
       # ページの座標へ換算する（extract_ocr_lines・build_ocr_image_occurrence）。
       # それを満たし、Tesseract が読める形式の画像だけを選ぶ。
       #
-      # 解像度はページの寸法から計らない。ページを実物より大きく作ったスキャン PDF がある
-      # （1542×2048pt のページに幅 2,057px の画像。ページから計ると 96dpi だが、本の大きさでは
-      # 約 270dpi）。そういう PDF を設定の dpi で描き直すと、情報の増えない 3 倍の引き伸ばしに
-      # なり、時間だけかかる（幅 5,160px で確信度は 92.2 → 91.9）。画素の多寡は画像の幅で見る
+      # 解像度はページの寸法から計らない。ページを実物より大きく作ったスキャン PDF を設定の dpi で
+      # 描き直すと、情報の増えない引き伸ばしになる。画素の多寡は画像の幅で見る
       # （MIN_OCR_IMAGE_WIDTH・upscale_for_ocr）。
       #
       # 回転の指定があるページは描き直しに任せる。画像を上下逆に置いた PDF は見分けられないが、
@@ -850,11 +835,9 @@ module VivlioStarter
         nil
       end
 
-      # 囲みや絵の多いページだけ、大津の二値化をかけた画像でも読み、確信度の高い字の多いほうを選ぶ
-      # （pdf-read-ocr-postprocess-spec.md §2.2）。ページ全体にいつも二値化をかけると悪くなる
-      # （F 値 89.7% → 85.8%）が、地の色の付いた囲みのページでは大きく効く（85.9% → 97.3%）。
-      # 文字だけのページは 1 回で済ませる。選ぶ基準は確信度の平均ではなく、確信度の高い語の字数にする。
-      # 平均で選ぶと、字を落とした読み（433 字 → 325 字）を選ぶことがある。
+      # 囲みや絵の多いページだけ、大津の二値化をかけた画像でも読み、確信度の高い字の多いほうを選ぶ。
+      # 二値化は地の色の付いた囲みのページでは認識率を上げるが、どのページにもかけると下がる。
+      # 選ぶ基準は確信度の平均ではなく、確信度の高い語の字数にする。平均で選ぶと、字を落とした読みを選ぶことがある。
       # 選んだ読みの画像も返す。英語での読み直し（english_reading）は同じ画像を読む
       # @return [Array(String, String, String)] [テキスト, TSV, 読んだ画像のパス]
       def second_reading(image_path, temp_dir, text, tsv)
@@ -916,14 +899,12 @@ module VivlioStarter
         end
       end
 
-      # Tesseract が文字の無い範囲とみなして読み飛ばした所を、切り出して読み直す
-      # （pdf-read-ocr-improvement-notes.md §4.11）。ページ全体を読むと、Tesseract は先に紙面の割り付けを
-      # 推定し、罫線で囲んだ表や色の帯の中の見出しを「文字の無いブロック」として読み飛ばす。切り出して
-      # 渡すとその推定に邪魔されずに読める（97 章の表 H-1 は「金属」「カリウム 2.2」が抜け落ちていた）。
+      # Tesseract が文字の無い範囲と判定した所を、切り出して読み直す。ページ全体を読むと、Tesseract は先に
+      # 紙面の割り付けを推定し、罫線で囲んだ表や色の帯の中の見出しを「文字の無いブロック」として扱う。
+      # 切り出して渡すと、その推定の影響を受けずに読める。
       # 読み直しの確信度の高い字が十分にあり、もとの読みより多いときだけ、その範囲の語を置き換える。
-      # 写真を読み直しても確信度の低い読み違いしか出ないので、置き換わらない。図の範囲（extract_illustration_regions_vips）と
-      # 重なる所は読み直さない。絵に描き込まれた英語の題がきれいに読めて本文に入り、その字を消して図を探すので
-      # 図も見つからなくなった（97 章のキログラムの絵）
+      # 図の範囲（extract_illustration_regions_vips）と重なる所は読み直さない。図の中の文字が本文に入り、
+      # その字を消して図を探すので図も検出できなくなるため
       def reread_skipped_regions(image_path, temp_dir, tsv, page)
         rows = parse_tsv_rows(tsv)
         words = rows.select { it.level == "5" && !it.text.empty? }
@@ -975,8 +956,7 @@ module VivlioStarter
 
       def touching?(a, b, gap) = a[0] - gap <= b[2] && b[0] - gap <= a[2] && a[1] - gap <= b[3] && b[1] - gap <= a[3]
 
-      # 範囲を余白つきで切り出して書き、[左, 上, パス] を返す。余白が狭いと字を読み違え（8px で「カリウム 2.2」が
-      # 「Ze」）、広いと周りの本文が入る（48px）
+      # 範囲を余白つきで切り出して書き、[左, 上, パス] を返す。余白が狭いと字を誤認識し、広いと周りの本文が入る
       def crop_for_reread(image, box, temp_dir, number)
         padding = (image.width * REREAD_PADDING).round
         left = [box[0].floor - padding, 0].max
@@ -997,10 +977,8 @@ module VivlioStarter
           confident.(region_words) > confident.(inside)
       end
 
-      # 斜体の行を、傾きを戻して読み直す（pdf-read-ocr-improvement-notes.md §4.15）。和文に斜体の書体は無く、
-      # Chrome は字を傾けて描く。Tesseract は傾いた和文を読めず、引用文が「BROKE DIED, PREVI…」になる
-      # （97 章の引用 9 か所・381 字）。確信度の低い行だけを切り出し、SLANT_ANGLE だけ逆に傾けて読む。
-      # 97 章では候補 57 行のうち、引用の 11 行が置き換わった
+      # 斜体の行を、傾きを戻して読み直す。和文に斜体の書体は無く、Chrome は字を傾けて描く。
+      # Tesseract は傾いた和文を認識できないので、確信度の低い行だけを切り出し、SLANT_ANGLE だけ逆に傾けて読む
       def reread_slanted_lines(image_path, temp_dir, tsv)
         return tsv unless @ocr.languages.include?("jpn")
 
@@ -1071,11 +1049,9 @@ module VivlioStarter
           (gained * 2 >= total || gained >= 20)
       end
 
-      # 英字の多いページだけ、英語の学習データでも読み、英字の語を語の位置で突き合わせて採る
-      # （pdf-read-ocr-improvement-notes.md §4.6）。日本語＋英語で読むと、コードの `@param` を `Gparam`、
-      # `velocity` を `vetoctty` と読み違える。英語だけで読むとコードはよく読めるが、和文はすべて崩れる。
-      # そこで和文の語は日本語＋英語の読みのまま残し、英字の語の連なりだけを差し替える。
-      # 97 章のスキャンで、英字の語は 205 → 212（最高・600dpi）、195 → 205（普通・300dpi）になった
+      # 英字の多いページだけ、英語の学習データでも読み、英字の語を語の位置で突き合わせて採る。
+      # 日本語＋英語で読むと、コードの `@param` を `Gparam` のように誤認識する。英語だけで読むと和文を認識できない。
+      # そこで和文の語は日本語＋英語の読みのまま残し、英字の語の連なりだけを差し替える
       def english_reading(image_path, temp_dir, tsv)
         return tsv unless @ocr.languages.include?("eng") && @ocr.languages.size > 1
 
@@ -1167,7 +1143,7 @@ module VivlioStarter
       end
 
       # Tesseract を 1 回だけ起動し、プレーンテキストと TSV（座標）を同時に書き出す。
-      # 以前は TSV 用とテキスト用に 2 回起動していた。テキストは TSV から行を組めなかったときの予備
+      # テキストは TSV から行を組めなかったときの予備
       # @return [Array(String, String)] [テキスト, TSV]
       def run_tesseract(image_path, output_base, languages: @ocr.languages)
         command = ["tesseract", image_path, output_base, "-l", languages.join("+"), "--psm", @ocr.psm.to_s, "txt", "tsv"]
@@ -1308,11 +1284,9 @@ module VivlioStarter
         inline_occurrences
       end
 
-      # OCR したページの画像から図の範囲を見つける（pdf-read-ocr-improvement-notes.md §4.2・§4.4）。
+      # OCR したページの画像から図の範囲を見つける。
       # ページを縮め、紙より濃い画素と色の付いた画素を拾い、OCR で読めた文字（確信度の高い語と行）を
-      # 消してから、残ったまとまりを図とみなす。97 章のスキャンでは、図 15 枚のうち 14 枚が見つかり、
-      # 誤りは無かった（行ごとの濃さで探していた以前の方法は 1 枚で、1 ページ約 3 秒かかっていた）。
-      # 白地の線だけの図は、文字を消すと線しか残らず、見つからない
+      # 消してから、残ったまとまりを図とみなす。白地の線だけの図は、文字を消すと線しか残らず、検出できない
       # @param words [Array<OcrWord>] このページの OCR の語（PDF のページの座標）
       # @return [Array<IllustrationRegion>] 元の画像の画素での範囲
       def extract_illustration_regions_vips(source_image_path, words, page)
@@ -1356,7 +1330,7 @@ module VivlioStarter
         end
       end
 
-      # 図の候補の画素のまとまりを、図の枠 [左, 上, 右, 下]（縮めた画像の画素）にする（pdf-read-ocr-improvement-notes.md §4.17）。
+      # 図の候補の画素のまとまりを、図の枠 [左, 上, 右, 下]（縮めた画像の画素）にする。
       # 隣り合う画素を 1 画素膨らませてつなぎ、枠は膨らませる前の画素で取る。枠は、埋まった列・行の
       # 最も長い連なりへ削る（trim_to_dense）。ページの端に接するもの（ページ上端の飾りの帯・色を
       # 敷いた章扉）は図にしない。図にすると、その上の文字を本体が本文から除いてしまう
@@ -1383,8 +1357,8 @@ module VivlioStarter
           whole = [inked.map { it % width }.min, inked.map { it / width }.min, inked.map { it % width }.max + 1, inked.map { it / width }.max + 1]
           box = trim_to_dense(ink, width, whole)
           next box if box && figure_box?(box, cells.size, width, height)
-          # 白地の多い絵は、埋まった列・行がまばらで、削ると下限より小さくなる（97 章の光格子時計の絵が
-          # 130×78pt から 48×18 画素に）。削る前の枠が図の条件を満たせば、そちらを採る
+          # 白地の多い絵は、埋まった列・行がまばらで、削ると下限より小さくなる。
+          # 削る前の枠が図の条件を満たせば、そちらを採る
           whole if figure_box?(whole, cells.size, width, height)
         end
       end
@@ -1399,9 +1373,7 @@ module VivlioStarter
       # 写真は埋まり、写真の横の消し残した字（小さなルビ・確信度の低い語）はまばらなので、写真に
       # つながった本文の字の列が枠から外れる。
       # 埋まった列・行のあいだに、少しは埋まった（FIGURE_SPARSE 以上の）列・行が FIGURE_BRIDGE 本以内はさまる
-      # だけなら、続きとみなす。白地の多い絵や表紙は、区画の境目にそうした行がはさまり、そこで切れて
-      # 絵の上の 4 割や表紙の下半分を落としていた（97 章の光格子時計の絵と『量子力学』の表紙・
-      # pdf-read-ocr-improvement-notes.md §4.20）
+      # だけなら、続きとみなす。白地の多い絵や表紙は、区画の境目にそうした行がはさまるため
       def trim_to_dense(ink, width, box)
         left, top, right, bottom = box
         longest = lambda do |ratios|
@@ -1675,7 +1647,7 @@ module VivlioStarter
 
       # --- OCR テキスト補正用の文字クラス正規表現 ---
       # 足すのは `\p{...}` に入らない 2 文字だけ。々 は \p{Han}、ヵヶ は \p{Katakana} に
-      # 含まれるため、並べると「character class has duplicated range」が毎回 5 行出る。
+      # 含まれるため、並べると「character class has duplicated range」の警告が出る。
       CJK_CHAR = /[\p{Han}\p{Hiragana}\p{Katakana}ー〆]/.freeze
       JP_PUNCT = /[、。，．：；！？!?…]/.freeze
       JP_OPEN  = /[「『（【《〈]/.freeze
@@ -1708,24 +1680,20 @@ module VivlioStarter
         end
       end
 
-      # OCR の誤認識を補正する表を当てる。
-      #
-      # **当てるのは OCR したページのテキストだけ**で、著者が自分で書いた原稿には触れない。
-      # 以前はこれをプロジェクトの prh 辞書（校正辞書）から読んでいたが、校正辞書は
-      # 全原稿に当たるため、アルミニウムの元素記号 `Al` が `AI` へ、「言語芸術」が
-      # 「言語彙術」へ書き換えられていた。走査の誤りと表記の方針は別物なので表を分けた。
+      # OCR の誤認識を補正する表を適用する。
+      # 適用するのは OCR したページのテキストだけで、著者が書いた原稿には適用しない
       def apply_ocr_corrections(text)
         ocr_corrections.reduce(text.to_s) do |memo, (matcher, expected)|
           memo.gsub(matcher, expected)
         end
       end
 
-      # 補正表の既定の置き場。プロジェクトごとに育てるものなので gem には持たせない
+      # 補正表の既定の置き場。プロジェクトごとに編集するので gem には含めない
       OCR_CORRECTIONS_FILE = File.join("config", "ocr_corrections.yml")
 
       # config/ocr_corrections.yml から補正ルールを読み込む（メモ化）。
       # 各ルールの patterns を Regexp にコンパイルし、[matcher, expected] の配列を返す。
-      # ファイルが無いプロジェクト（1.0 より前の雛形）では補正せずに素通りさせる
+      # ファイルが無ければ補正しない
       def ocr_corrections
         @ocr_corrections ||= begin
           path = File.join(Dir.pwd, OCR_CORRECTIONS_FILE)
@@ -1822,8 +1790,7 @@ module VivlioStarter
         )
       end
 
-      # OCR モードを :auto / :always / :never に正規化する。本体と book.yml は切る値を disable と書く
-      # （以前は disable を知らず :auto にしていて、OCR が切れなかった。pdf-read-ocr-improvement-notes.md §4.19）
+      # OCR モードを :auto / :always / :never に正規化する。本体と book.yml は OCR を無効にする値を disable と書く
       def normalize_ocr_mode(value)
         case value.to_s.strip.downcase
         in "" | "auto" then :auto
@@ -1834,15 +1801,14 @@ module VivlioStarter
         end
       end
 
-      # OCR 言語指定を正規化する（配列化 + エイリアス解決 + 重複排除、既定は jpn）
+      # OCR 言語指定を正規化する（配列化 + エイリアス解決 + 重複排除、既定は日本語と英語）
       def normalize_ocr_languages(value)
         raw = case value
               in Array then value
               else value.to_s.split(/[+,]/)
               end
         languages = raw.map { normalize_ocr_language_alias(it) }.reject(&:empty?)
-        # 既定は日本語と英語。技術書はコードや英字の語を含み、英語を足すと識別子が
-        # 18 語中 7 → 16 語戻った。和文は悪くならない（pdf-read-ocr-postprocess-spec.md §2.1）
+        # 技術書はコードや英字の語を含むので、既定は日本語と英語にする
         languages = %w[jpn eng] if languages.empty?
         languages.uniq
       end
@@ -1901,13 +1867,10 @@ module VivlioStarter
         0.0
       end
 
-      # OCR モード設定値のアクセサ
       def ocr_mode = @ocr.mode
 
-      # イラスト内テキスト処理ポリシーのアクセサ
       def inline_image_text = @ocr.inline_image_text
 
-      # 同一行とみなす Y 座標差の閾値のアクセサ
       def line_merge_tolerance = @line_merge_tolerance
     end
   end
