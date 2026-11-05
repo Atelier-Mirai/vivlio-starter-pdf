@@ -45,7 +45,7 @@ module VivlioStarter
           return false
         end
 
-        document.write(pdf_path, optimize: true)
+        Utilities.write_document(document, pdf_path)
         LogHelper.log_success("[OutlineWriter] PDF にアウトラインを #{inserted} 件追加しました")
         true
       rescue StandardError => e

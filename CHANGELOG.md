@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **しおりを付けるときに、閲覧用 PDF が途中で切れた壊れたファイルになることがあった** (`utilities.rb` の `write_document`): `vs build` が EPUB・Kindle も作るとき、EPUB の枝の子プロセスが終わったシグナル（SIGCHLD）が、主スレッドでの PDF の書き込みと重なると、Ruby 3.4・4.0 に同梱の zlib 3.2.3 の圧縮が `Zlib::BufError`（buffer error）で失敗する。HexaPDF は書き出し先を空にしてから書くので、途中までの PDF が残っていた。一時ファイルに書いてから置き換え、書き込みは別のスレッドで行う（シグナルを受けるのは主スレッドだけなので失敗しない）。空白ページ PDF の生成も同じ書き込みを使う。
+
 ### Planned
 - パフォーマンス最適化（大規模 PDF 対応）
 - 追加 OCR エンジン対応
