@@ -6,7 +6,7 @@ require "rubocop/rake_task"
 
 RuboCop::RakeTask.new(:rubocop)
 
-SUPPORTED_RUBY_VERSIONS = %w[3.4.10 4.0.9].freeze
+SUPPORTED_RUBY_VERSIONS = %w[3.4.12 4.0.9].freeze
 
 # 子プロセスは別の Ruby で動くので、親の bundler の環境変数を渡さない（値が nil の変数は取り除かれる）
 UNBUNDLED_ENV = {
